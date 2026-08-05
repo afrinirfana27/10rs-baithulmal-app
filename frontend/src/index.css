@@ -1,0 +1,190 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-app: #F7F8FA;
+  --bg-sidebar: #F6F3EB;
+  --bg-card: #FFFFFF;
+  --primary: #157A45;
+  --primary-hover: #0E5E34;
+  --accent: #157A45;
+  --accent-hover: #0E5E34;
+  --text-primary: #1A211C;
+  --text-secondary: #5C6B61;
+  --text-muted: #8A998E;
+  --border: #E5E7EB;
+  --status-exceed: #A93F35;
+  --status-active: #2D7A4D;
+  --status-vatti: #D9933B;
+
+  /* Tile pastels — inspired by reference dashboard */
+  --tile-mint: #DFF3E4;
+  --tile-mint-text: #1F7D46;
+  --tile-amber: #FBE9BE;
+  --tile-amber-text: #8A5A18;
+  --tile-blue: #DDE9FB;
+  --tile-blue-text: #1E3A8A;
+  --tile-pink: #F9DDE4;
+  --tile-pink-text: #9F2B4B;
+}
+
+body {
+  margin: 0;
+  font-family: 'Roboto', system-ui, -apple-system, Segoe UI, sans-serif;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-weight: 400;
+}
+
+/* We keep these class names for backward compatibility but use Roboto everywhere */
+.font-serif { font-family: 'Roboto', system-ui, sans-serif; letter-spacing: -0.01em; font-weight: 700; }
+.font-sans  { font-family: 'Roboto', system-ui, sans-serif; }
+.font-display { font-family: 'Roboto', system-ui, sans-serif; font-weight: 700; letter-spacing: -0.01em; }
+
+@layer base {
+  :root {
+    --background: 220 16% 97%;
+    --foreground: 138 8% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 138 8% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 138 8% 12%;
+    --primary: 143 71% 28%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 138 8% 12%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 138 8% 40%;
+    --accent: 143 71% 28%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 5 54% 44%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 143 71% 28%;
+    --radius: 0.85rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; font-family: 'Roboto', system-ui, sans-serif; }
+  h1, h2, h3, h4 { font-family: 'Roboto', system-ui, sans-serif; letter-spacing: -0.01em; font-weight: 700; }
+}
+
+/* Buttons */
+.btn-primary-moss { background: var(--primary); color: #FFFFFF; border-radius: 9999px; }
+.btn-primary-moss:hover { background: var(--primary-hover); }
+.btn-accent-copper { background: var(--primary); color: #FFFFFF; border-radius: 9999px; }
+.btn-accent-copper:hover { background: var(--primary-hover); }
+
+/* Coin motif — now uses green + Roboto */
+.coin-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 9999px;
+  background: rgba(21, 122, 69, 0.12);
+  color: var(--primary); font-family: 'Roboto', sans-serif; font-weight: 700; font-size: 16px;
+}
+.coin-badge-sm {
+  width: 32px; height: 32px; font-size: 12px; border-radius: 9999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(21, 122, 69, 0.12); color: var(--primary);
+  font-family: 'Roboto', sans-serif; font-weight: 700;
+}
+
+/* Cards */
+.card-earth {
+  background: #FFFFFF; border: 1px solid var(--border); border-radius: 0.85rem;
+  box-shadow: 0 2px 10px rgba(15, 30, 20, 0.03);
+  transition: box-shadow 200ms ease;
+}
+.card-earth:hover { box-shadow: 0 8px 24px rgba(15, 30, 20, 0.06); }
+
+/* Sidebar link */
+.side-link {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.65rem 0.9rem; border-radius: 0.6rem;
+  color: #5C6B61; font-weight: 500; font-size: 0.925rem;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.side-link:hover { background: rgba(21, 122, 69, 0.06); color: #1A211C; }
+.side-link.active {
+  background: rgba(21, 122, 69, 0.10);
+  color: var(--primary);
+  font-weight: 600;
+  border-left: 3px solid var(--primary);
+}
+
+/* Utility overrides */
+.text-moss { color: var(--primary); }
+.text-copper { color: var(--primary); }
+.bg-moss { background-color: var(--primary); }
+.bg-copper { background-color: var(--primary); }
+.border-earth { border-color: var(--border); }
+.bg-app { background-color: var(--bg-app); }
+.bg-sidebar { background-color: #FFFFFF; }
+
+/* Tile colors */
+.tile-mint  { background: var(--tile-mint);  color: var(--tile-mint-text); }
+.tile-amber { background: var(--tile-amber); color: var(--tile-amber-text); }
+.tile-blue  { background: var(--tile-blue);  color: var(--tile-blue-text); }
+.tile-pink  { background: var(--tile-pink);  color: var(--tile-pink-text); }
+
+/* Hero gradient card (fund balance) */
+.hero-fund {
+  background: linear-gradient(135deg, #1F8B4E 0%, #157A45 60%, #0E5E34 100%);
+  color: #FFFFFF;
+  border-radius: 1rem;
+  padding: 1.25rem 1.25rem 1.5rem;
+  box-shadow: 0 12px 30px rgba(21, 122, 69, 0.25);
+}
+
+/* Status badges */
+.status-active   { background: rgba(45,122,77,0.12); color: #2D7A4D; }
+.status-exceed   { background: rgba(169,63,53,0.12); color: #A93F35; }
+.status-blocked  { background: rgba(26,33,28,0.12);  color: #1A211C; }
+.status-closed   { background: rgba(21,122,69,0.10); color: #157A45; }
+.status-pending  { background: rgba(217,147,59,0.15); color: #8A5A18; }
+.status-approved { background: rgba(45,122,77,0.12); color: #2D7A4D; }
+
+/* Focus */
+*:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px;
+}
+
+/* Bottom mobile nav */
+.bottom-nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  background: #FFFFFF; border-top: 1px solid var(--border);
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  padding: 0.4rem 0.25rem 0.5rem;
+}
+.bottom-nav a {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 0.35rem 0.25rem; color: #6B7280; font-size: 11px; font-weight: 500;
+  transition: color 150ms ease;
+}
+.bottom-nav a.active { color: var(--primary); }
+.bottom-nav a.active .bn-icon { color: var(--primary); }
+.bottom-nav .bn-icon { color: #6B7280; }
+
+/* Table refinements */
+table { font-variant-numeric: tabular-nums; }
+
+/* Debug wrapper */
+@layer base {
+  [data-debug-wrapper="true"] { display: contents !important; }
+  [data-debug-wrapper="true"] > * {
+    margin-left: inherit; margin-right: inherit; margin-top: inherit; margin-bottom: inherit;
+    padding-left: inherit; padding-right: inherit; padding-top: inherit; padding-bottom: inherit;
+    column-gap: inherit; row-gap: inherit; gap: inherit;
+    border-left-width: inherit; border-right-width: inherit; border-top-width: inherit; border-bottom-width: inherit;
+    border-left-style: inherit; border-right-style: inherit; border-top-style: inherit; border-bottom-style: inherit;
+    border-left-color: inherit; border-right-color: inherit; border-top-color: inherit; border-bottom-color: inherit;
+  }
+}

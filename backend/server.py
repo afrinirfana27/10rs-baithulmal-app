@@ -1,0 +1,820 @@
+from dotenv import load_dotenv
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+import os
+import uuid
+import logging
+import bcrypt
+import jwt
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Literal
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field, ConfigDict
+
+# Mongo
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+app = FastAPI(title="10Rs Baithulmal API")
+api = APIRouter(prefix="/api")
+
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALGO = "HS256"
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("baithulmal")
+
+
+# ---------------- utils ----------------
+def hash_password(p: str) -> str:
+    return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(p: str, h: str) -> bool:
+    try:
+        return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception:
+        return False
+
+
+def create_token(user_id: str, email: str, role: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+        "type": "access",
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+
+
+async def get_current_user(request: Request) -> dict:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth[7:]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def new_id() -> str:
+    return str(uuid.uuid4())
+
+
+# ---------------- Models ----------------
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    name: str
+    role: Literal["admin", "collector"] = "collector"
+    permissions: List[str] = Field(default_factory=list)
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[Literal["admin", "collector"]] = None
+    permissions: Optional[List[str]] = None
+    password: Optional[str] = None
+
+
+class PersonBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    father_name: str
+    address: str
+    contact: str
+    area: Optional[str] = ""
+
+
+class PersonUpdate(BaseModel):
+    name: Optional[str] = None
+    father_name: Optional[str] = None
+    address: Optional[str] = None
+    contact: Optional[str] = None
+    area: Optional[str] = None
+
+
+class SecurityDetail(BaseModel):
+    name: str
+    father_name: str
+    address: str
+    contact: str
+
+
+class KadanIn(BaseModel):
+    beneficiary_id: str
+    category: Literal["Medical", "Education", "Economic"]
+    amount: float
+    repayment_months: int
+    area: str
+    security: SecurityDetail
+    kadan_type: Literal["kadan", "vattiyilla"] = "kadan"
+    notes: Optional[str] = ""
+
+
+class RepaymentIn(BaseModel):
+    amount: float
+    note: Optional[str] = ""
+
+
+class ExtendIn(BaseModel):
+    additional_months: int
+    note: Optional[str] = ""
+
+
+class BlockIn(BaseModel):
+    reason: str
+    block_months: int
+
+
+class SadakahIn(BaseModel):
+    beneficiary_id: str
+    amount: float
+    note: Optional[str] = ""
+
+
+class PaymentIn(BaseModel):
+    donor_id: str
+    month_from: str  # YYYY-MM
+    month_to: str    # YYYY-MM
+    amount_per_month: float = 10.0
+    note: Optional[str] = ""
+
+
+class ExpenseIn(BaseModel):
+    kind: Literal["salary", "maintenance"]
+    worker_id: Optional[str] = None
+    month: Optional[str] = None
+    category: Optional[str] = ""  # for maintenance
+    amount: float
+    note: Optional[str] = ""
+
+
+class ApprovalActionIn(BaseModel):
+    approve: bool
+    note: Optional[str] = ""
+
+
+# ---------------- Auth ----------------
+@api.post("/auth/login")
+async def login(data: LoginIn):
+    email = data.email.strip().lower()
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(data.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = create_token(user["id"], user["email"], user.get("role", "collector"))
+    return {
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "role": user.get("role", "collector"),
+            "permissions": user.get("permissions", []),
+        },
+    }
+
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user
+
+
+# ---------------- Admin: Users ----------------
+@api.get("/admin/users")
+async def list_users(admin: dict = Depends(require_admin)):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    return users
+
+
+@api.post("/admin/users")
+async def create_user(data: UserCreate, admin: dict = Depends(require_admin)):
+    email = data.email.strip().lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Email already exists")
+    doc = {
+        "id": new_id(),
+        "email": email,
+        "name": data.name,
+        "role": data.role,
+        "permissions": data.permissions,
+        "password_hash": hash_password(data.password),
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(doc)
+    doc.pop("password_hash", None)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/admin/users/{user_id}")
+async def update_user(user_id: str, data: UserUpdate, admin: dict = Depends(require_admin)):
+    updates = {}
+    for k in ("name", "role", "permissions"):
+        v = getattr(data, k)
+        if v is not None:
+            updates[k] = v
+    if data.password:
+        updates["password_hash"] = hash_password(data.password)
+    if updates:
+        await db.users.update_one({"id": user_id}, {"$set": updates})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@api.delete("/admin/users/{user_id}")
+async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    await db.users.delete_one({"id": user_id})
+    return {"ok": True}
+
+
+# ---------------- Generic person modules (donors/beneficiaries/workers) ----------------
+COLLECTIONS = {"donors": "donors", "beneficiaries": "beneficiaries", "workers": "workers"}
+
+
+async def _next_serial(coll: str) -> str:
+    prefix = {"donors": "D", "beneficiaries": "B", "workers": "W"}[coll]
+    count = await db[coll].count_documents({})
+    return f"{prefix}{(count + 1):04d}"
+
+
+@api.get("/people/{kind}/lookup")
+async def lookup_person(kind: str, contact: str):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    doc = await db[kind].find_one({"contact": contact.strip()}, {"_id": 0})
+    return {"exists": bool(doc), "record": doc}
+
+
+@api.get("/people/{kind}")
+async def list_people(kind: str, user: dict = Depends(get_current_user)):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    docs = await db[kind].find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return docs
+
+
+@api.post("/people/{kind}")
+async def create_person(kind: str, data: PersonBase, user: dict = Depends(get_current_user)):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    contact = data.contact.strip()
+    existing = await db[kind].find_one({"contact": contact})
+    if existing:
+        raise HTTPException(status_code=400, detail=f"{kind[:-1].title()} with this contact already exists")
+    doc = {
+        "id": new_id(),
+        "serial": await _next_serial(kind),
+        "name": data.name.strip(),
+        "father_name": data.father_name.strip(),
+        "address": data.address.strip(),
+        "contact": contact,
+        "area": (data.area or "").strip(),
+        "created_at": now_iso(),
+    }
+    await db[kind].insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/people/{kind}/{pid}")
+async def get_person(kind: str, pid: str, user: dict = Depends(get_current_user)):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    doc = await db[kind].find_one({"id": pid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    return doc
+
+
+@api.patch("/people/{kind}/{pid}")
+async def update_person(kind: str, pid: str, data: PersonUpdate, user: dict = Depends(get_current_user)):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    updates = {k: v.strip() if isinstance(v, str) else v for k, v in data.model_dump(exclude_none=True).items()}
+    if updates:
+        await db[kind].update_one({"id": pid}, {"$set": updates})
+    doc = await db[kind].find_one({"id": pid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    return doc
+
+
+@api.delete("/people/{kind}/{pid}")
+async def delete_person(kind: str, pid: str, admin: dict = Depends(require_admin)):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    await db[kind].delete_one({"id": pid})
+    return {"ok": True}
+
+
+# ---------------- Loans (Kadan + Vattiyilla Kadan) ----------------
+def _compute_loan_status(loan: dict) -> dict:
+    """Compute derived status: active | time_limit_exceed | blocked | closed."""
+    if loan.get("status") == "blocked":
+        return loan
+    if loan.get("status") == "closed":
+        return loan
+    now = datetime.now(timezone.utc)
+    due = datetime.fromisoformat(loan["due_date"])
+    paid = loan.get("total_paid", 0)
+    if paid >= loan["amount"]:
+        loan["status"] = "closed"
+    elif now > due:
+        loan["status"] = "time_limit_exceed"
+    else:
+        loan["status"] = "active"
+    return loan
+
+
+@api.get("/loans")
+async def list_loans(kadan_type: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {}
+    if kadan_type:
+        q["kadan_type"] = kadan_type
+    docs = await db.loans.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    for d in docs:
+        _compute_loan_status(d)
+    return docs
+
+
+@api.post("/loans")
+async def create_loan(data: KadanIn, user: dict = Depends(get_current_user)):
+    beneficiary = await db.beneficiaries.find_one({"id": data.beneficiary_id}, {"_id": 0})
+    if not beneficiary:
+        raise HTTPException(status_code=404, detail="Beneficiary not found")
+    now = datetime.now(timezone.utc)
+    due = now + timedelta(days=30 * data.repayment_months)
+    doc = {
+        "id": new_id(),
+        "kadan_type": data.kadan_type,
+        "category": data.category,
+        "amount": float(data.amount),
+        "repayment_months": int(data.repayment_months),
+        "area": data.area.strip(),
+        "beneficiary": beneficiary,
+        "security": data.security.model_dump(),
+        "notes": data.notes or "",
+        "total_paid": 0.0,
+        "repayments": [],
+        "status": "active",
+        "created_at": now.isoformat(),
+        "due_date": due.isoformat(),
+        "block_info": None,
+        "extension_history": [],
+        "created_by": user["id"],
+    }
+    await db.loans.insert_one(doc)
+    doc.pop("_id", None)
+    return _compute_loan_status(doc)
+
+
+@api.get("/loans/{lid}")
+async def get_loan(lid: str, user: dict = Depends(get_current_user)):
+    doc = await db.loans.find_one({"id": lid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    return _compute_loan_status(doc)
+
+
+@api.post("/loans/{lid}/repay")
+async def repay_loan(lid: str, data: RepaymentIn, user: dict = Depends(get_current_user)):
+    loan = await db.loans.find_one({"id": lid})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    entry = {
+        "id": new_id(),
+        "amount": float(data.amount),
+        "note": data.note or "",
+        "at": now_iso(),
+        "by": user["id"],
+    }
+    total_paid = float(loan.get("total_paid", 0)) + float(data.amount)
+    updates = {"total_paid": total_paid}
+    if total_paid >= loan["amount"]:
+        updates["status"] = "closed"
+    await db.loans.update_one({"id": lid}, {"$set": updates, "$push": {"repayments": entry}})
+    doc = await db.loans.find_one({"id": lid}, {"_id": 0})
+    return _compute_loan_status(doc)
+
+
+@api.post("/loans/{lid}/extend")
+async def extend_loan(lid: str, data: ExtendIn, admin: dict = Depends(require_admin)):
+    loan = await db.loans.find_one({"id": lid})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    due = datetime.fromisoformat(loan["due_date"]) + timedelta(days=30 * data.additional_months)
+    ext = {
+        "months": data.additional_months,
+        "note": data.note or "",
+        "at": now_iso(),
+        "by": admin["id"],
+    }
+    await db.loans.update_one(
+        {"id": lid},
+        {"$set": {"due_date": due.isoformat(), "status": "active"}, "$push": {"extension_history": ext}},
+    )
+    doc = await db.loans.find_one({"id": lid}, {"_id": 0})
+    return _compute_loan_status(doc)
+
+
+@api.post("/loans/{lid}/block")
+async def block_loan(lid: str, data: BlockIn, admin: dict = Depends(require_admin)):
+    loan = await db.loans.find_one({"id": lid})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    block_info = {
+        "reason": data.reason,
+        "block_months": data.block_months,
+        "blocked_at": now_iso(),
+        "unblock_at": (datetime.now(timezone.utc) + timedelta(days=30 * data.block_months)).isoformat(),
+        "by": admin["id"],
+    }
+    await db.loans.update_one({"id": lid}, {"$set": {"status": "blocked", "block_info": block_info}})
+    doc = await db.loans.find_one({"id": lid}, {"_id": 0})
+    return doc
+
+
+@api.post("/loans/{lid}/unblock")
+async def unblock_loan(lid: str, admin: dict = Depends(require_admin)):
+    await db.loans.update_one({"id": lid}, {"$set": {"status": "active", "block_info": None}})
+    doc = await db.loans.find_one({"id": lid}, {"_id": 0})
+    return _compute_loan_status(doc)
+
+
+# ---------------- Sadakah ----------------
+@api.get("/sadakah")
+async def list_sadakah(user: dict = Depends(get_current_user)):
+    return await db.sadakah.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/sadakah")
+async def create_sadakah(data: SadakahIn, user: dict = Depends(get_current_user)):
+    beneficiary = await db.beneficiaries.find_one({"id": data.beneficiary_id}, {"_id": 0})
+    if not beneficiary:
+        raise HTTPException(status_code=404, detail="Beneficiary not found")
+    doc = {
+        "id": new_id(),
+        "beneficiary": beneficiary,
+        "amount": float(data.amount),
+        "note": data.note or "",
+        "created_at": now_iso(),
+        "created_by": user["id"],
+    }
+    await db.sadakah.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+# ---------------- Payments (donor monthly contribution) ----------------
+def _months_between(start: str, end: str) -> List[str]:
+    """Return list of YYYY-MM strings inclusive between start and end."""
+    sy, sm = int(start[:4]), int(start[5:7])
+    ey, em = int(end[:4]), int(end[5:7])
+    months = []
+    y, m = sy, sm
+    while (y, m) <= (ey, em):
+        months.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+        if len(months) > 240:
+            break
+    return months
+
+
+@api.get("/payments")
+async def list_payments(user: dict = Depends(get_current_user)):
+    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.get("/payments/pending")
+async def list_pending_payments(admin: dict = Depends(require_admin)):
+    return await db.payments.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/payments")
+async def create_payment(data: PaymentIn, user: dict = Depends(get_current_user)):
+    donor = await db.donors.find_one({"id": data.donor_id}, {"_id": 0})
+    if not donor:
+        raise HTTPException(status_code=404, detail="Donor not found")
+    months = _months_between(data.month_from, data.month_to)
+    if not months:
+        raise HTTPException(status_code=400, detail="Invalid month range")
+    total = float(data.amount_per_month) * len(months)
+    # Collector creates pending; admin auto-approves
+    is_admin = user.get("role") == "admin"
+    doc = {
+        "id": new_id(),
+        "receipt_no": f"R{int(datetime.now(timezone.utc).timestamp())}",
+        "donor": donor,
+        "month_from": data.month_from,
+        "month_to": data.month_to,
+        "months": months,
+        "amount_per_month": float(data.amount_per_month),
+        "total_amount": total,
+        "note": data.note or "",
+        "status": "approved" if is_admin else "pending",
+        "collected_by": user["id"],
+        "collected_by_name": user.get("name", ""),
+        "created_at": now_iso(),
+        "approved_at": now_iso() if is_admin else None,
+        "approved_by": user["id"] if is_admin else None,
+    }
+    await db.payments.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.post("/payments/{pid}/approve")
+async def approve_payment(pid: str, data: ApprovalActionIn, admin: dict = Depends(require_admin)):
+    p = await db.payments.find_one({"id": pid})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    updates = {
+        "status": "approved" if data.approve else "rejected",
+        "approved_at": now_iso(),
+        "approved_by": admin["id"],
+        "approval_note": data.note or "",
+    }
+    await db.payments.update_one({"id": pid}, {"$set": updates})
+    doc = await db.payments.find_one({"id": pid}, {"_id": 0})
+    return doc
+
+
+# ---------------- Expenses ----------------
+@api.get("/expenses")
+async def list_expenses(user: dict = Depends(get_current_user)):
+    return await db.expenses.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/expenses")
+async def create_expense(data: ExpenseIn, user: dict = Depends(get_current_user)):
+    worker = None
+    if data.worker_id:
+        worker = await db.workers.find_one({"id": data.worker_id}, {"_id": 0})
+        if not worker and data.kind == "salary":
+            raise HTTPException(status_code=404, detail="Worker not found")
+    doc = {
+        "id": new_id(),
+        "kind": data.kind,
+        "worker": worker,
+        "month": data.month,
+        "category": data.category or "",
+        "amount": float(data.amount),
+        "note": data.note or "",
+        "created_at": now_iso(),
+        "created_by": user["id"],
+    }
+    await db.expenses.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+# ---------------- Accounts / Dashboard ----------------
+@api.get("/accounts/summary")
+async def accounts_summary(fund: str = "baithulmal", user: dict = Depends(get_current_user)):
+    """fund: 'baithulmal' (main) or 'vattiyilla' (interest-free)."""
+    is_vatti = fund == "vattiyilla"
+    loan_type_filter = "vattiyilla" if is_vatti else "kadan"
+
+    # Loans of this fund
+    loans_out = await db.loans.aggregate([
+        {"$match": {"kadan_type": loan_type_filter, "status": {"$in": ["active", "time_limit_exceed"]}}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}, "paid": {"$sum": "$total_paid"}}},
+    ]).to_list(1)
+    total_loan = loans_out[0]["total"] if loans_out else 0
+    total_loan_paid = loans_out[0]["paid"] if loans_out else 0
+
+    # Total ever repaid to this fund
+    all_repayments = await db.loans.aggregate([
+        {"$match": {"kadan_type": loan_type_filter}},
+        {"$group": {"_id": None, "total": {"$sum": "$total_paid"}}},
+    ]).to_list(1)
+    total_repaid = all_repayments[0]["total"] if all_repayments else 0
+
+    loans_active = await db.loans.count_documents({"kadan_type": loan_type_filter, "status": {"$in": ["active", "time_limit_exceed"]}})
+    loans_blocked = await db.loans.count_documents({"kadan_type": loan_type_filter, "status": "blocked"})
+    loans_closed = await db.loans.count_documents({"kadan_type": loan_type_filter, "status": "closed"})
+    beneficiaries_count = await db.beneficiaries.count_documents({})
+
+    if is_vatti:
+        # Vattiyilla fund only tracks its loans + repayments (no interest, no separate payment collection)
+        # Balance = total_repaid - total_loan_outstanding (kitty available to lend again)
+        balance = total_repaid - (total_loan - total_loan_paid)
+        return {
+            "fund": "vattiyilla",
+            "balance": balance,
+            "total_collected": total_repaid,          # repayments received
+            "total_pending": 0,
+            "total_expense": 0,
+            "total_sadakah": 0,
+            "total_loan_outstanding": total_loan - total_loan_paid,
+            "total_loan_issued": total_loan,
+            "beneficiaries_count": beneficiaries_count,
+            "donors_count": 0,
+            "workers_count": 0,
+            "loans_active": loans_active,
+            "loans_blocked": loans_blocked,
+            "loans_closed": loans_closed,
+        }
+
+    # Baithulmal (main) fund
+    approved_payments = await db.payments.aggregate([
+        {"$match": {"status": "approved"}},
+        {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}},
+    ]).to_list(1)
+    pending_payments = await db.payments.aggregate([
+        {"$match": {"status": "pending"}},
+        {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}},
+    ]).to_list(1)
+    expenses = await db.expenses.aggregate([
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+    ]).to_list(1)
+    sadakah = await db.sadakah.aggregate([
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+    ]).to_list(1)
+
+    total_collected = approved_payments[0]["total"] if approved_payments else 0
+    total_pending = pending_payments[0]["total"] if pending_payments else 0
+    total_expense = expenses[0]["total"] if expenses else 0
+    total_sadakah = sadakah[0]["total"] if sadakah else 0
+
+    balance = total_collected - total_expense - total_sadakah - (total_loan - total_loan_paid)
+
+    donors_count = await db.donors.count_documents({})
+    workers_count = await db.workers.count_documents({})
+
+    return {
+        "fund": "baithulmal",
+        "balance": balance,
+        "total_collected": total_collected,
+        "total_pending": total_pending,
+        "total_expense": total_expense,
+        "total_sadakah": total_sadakah,
+        "total_loan_outstanding": total_loan - total_loan_paid,
+        "donors_count": donors_count,
+        "beneficiaries_count": beneficiaries_count,
+        "workers_count": workers_count,
+        "loans_active": loans_active,
+        "loans_blocked": loans_blocked,
+    }
+
+
+@api.get("/accounts/user-outstanding")
+async def user_outstanding(admin: dict = Depends(require_admin)):
+    """List collectors and their pending (outstanding) payment totals."""
+    pipeline = [
+        {"$match": {"status": "pending"}},
+        {"$group": {
+            "_id": "$collected_by",
+            "name": {"$first": "$collected_by_name"},
+            "total": {"$sum": "$total_amount"},
+            "count": {"$sum": 1},
+        }},
+    ]
+    rows = await db.payments.aggregate(pipeline).to_list(1000)
+    return [{"user_id": r["_id"], "name": r.get("name") or "", "outstanding": r["total"], "count": r["count"]} for r in rows]
+
+
+# ---------------- Reports ----------------
+@api.get("/reports")
+async def report(range: str = "daily", start: Optional[str] = None, end: Optional[str] = None,
+                 donor_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """range: daily|monthly|yearly|custom|individual"""
+    now = datetime.now(timezone.utc)
+    if range == "daily":
+        s = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        e = s + timedelta(days=1)
+    elif range == "monthly":
+        s = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        # first of next month
+        if s.month == 12:
+            e = s.replace(year=s.year + 1, month=1)
+        else:
+            e = s.replace(month=s.month + 1)
+    elif range == "yearly":
+        s = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        e = s.replace(year=s.year + 1)
+    elif range == "custom":
+        if not start or not end:
+            raise HTTPException(status_code=400, detail="start and end required")
+        s = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+        e = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    elif range == "individual":
+        if not donor_id:
+            raise HTTPException(status_code=400, detail="donor_id required")
+        payments = await db.payments.find({"donor.id": donor_id, "status": "approved"}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+        total = sum(p["total_amount"] for p in payments)
+        donor = await db.donors.find_one({"id": donor_id}, {"_id": 0})
+        return {"range": "individual", "donor": donor, "payments": payments, "total": total}
+    else:
+        raise HTTPException(status_code=400, detail="Invalid range")
+
+    s_iso, e_iso = s.isoformat(), e.isoformat()
+    payments = await db.payments.find({"created_at": {"$gte": s_iso, "$lt": e_iso}, "status": "approved"}, {"_id": 0}).to_list(5000)
+    expenses = await db.expenses.find({"created_at": {"$gte": s_iso, "$lt": e_iso}}, {"_id": 0}).to_list(5000)
+    sadakah = await db.sadakah.find({"created_at": {"$gte": s_iso, "$lt": e_iso}}, {"_id": 0}).to_list(5000)
+    loans = await db.loans.find({"created_at": {"$gte": s_iso, "$lt": e_iso}}, {"_id": 0}).to_list(5000)
+
+    total_income = sum(p["total_amount"] for p in payments)
+    total_expense = sum(e["amount"] for e in expenses)
+    total_sadakah = sum(x["amount"] for x in sadakah)
+
+    return {
+        "range": range,
+        "start": s_iso,
+        "end": e_iso,
+        "payments": payments,
+        "expenses": expenses,
+        "sadakah": sadakah,
+        "loans": loans,
+        "totals": {
+            "income": total_income,
+            "expense": total_expense,
+            "sadakah": total_sadakah,
+            "net": total_income - total_expense - total_sadakah,
+            "payments_count": len(payments),
+            "expenses_count": len(expenses),
+        },
+    }
+
+
+# ---------------- Startup ----------------
+@app.on_event("startup")
+async def on_start():
+    try:
+        await db.donors.create_index("contact", unique=True)
+        await db.beneficiaries.create_index("contact", unique=True)
+        await db.workers.create_index("contact", unique=True)
+        await db.users.create_index("email", unique=True)
+    except Exception as ex:
+        logger.warning(f"Index setup: {ex}")
+
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@baithulmal.com").lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    existing = await db.users.find_one({"email": admin_email})
+    if not existing:
+        await db.users.insert_one({
+            "id": new_id(),
+            "email": admin_email,
+            "password_hash": hash_password(admin_password),
+            "name": "Administrator",
+            "role": "admin",
+            "permissions": ["*"],
+            "created_at": now_iso(),
+        })
+        logger.info(f"Seeded admin: {admin_email}")
+    elif not verify_password(admin_password, existing.get("password_hash", "")):
+        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
+        logger.info("Updated admin password from env")
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    client.close()
+
+
+app.include_router(api)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

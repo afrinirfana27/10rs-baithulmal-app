@@ -1,0 +1,119 @@
+{
+  "theme_archetype": "Archetype 1: Organic & Earthy + Archetype 4: Swiss Functionalism",
+  "typography": {
+    "headings": {
+      "family": "Cormorant Garamond, serif",
+      "weights": ["400", "600", "700"],
+      "usage": "Page titles, hero numbers, authentication screen branding. Gives a dignified, editorial, and trustworthy feel."
+    },
+    "body_and_ui": {
+      "family": "Outfit, sans-serif",
+      "weights": ["300", "400", "500", "600"],
+      "usage": "Dashboard labels, form inputs, data tables, micro-copy. Modern, legible, and slightly geometric to balance the serif."
+    },
+    "rules": "H1 max text-5xl. Use tight tracking on headings (-0.02em). Subheadings should contrast in weight."
+  },
+  "colors": {
+    "background": {
+      "app": "#FDFBF7",
+      "sidebar": "#F6F3EB",
+      "card": "#FFFFFF"
+    },
+    "primary": {
+      "DEFAULT": "#244F35",
+      "hover": "#1A3B27",
+      "description": "Deep Moss Green. Signifies trust, Islamic heritage, and financial growth."
+    },
+    "accent": {
+      "DEFAULT": "#C67A3D",
+      "hover": "#A6632E",
+      "description": "Copper / Warm Terracotta. Connects to the '10Rs coin' motif. Use for primary call-to-actions and key highlights."
+    },
+    "text": {
+      "primary": "#1A211C",
+      "secondary": "#5C6B61",
+      "muted": "#8A998E"
+    },
+    "status": {
+      "time_limit_exceed": "#A93F35",
+      "active": "#2D7A4D",
+      "vattiyilla_kadan": "#D9933B"
+    },
+    "border": "#EAE5D9"
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "card": "0 8px 30px rgba(36, 79, 53, 0.04)",
+      "hover": "0 12px 40px rgba(36, 79, 53, 0.08)"
+    },
+    "borders": "1px solid #EAE5D9",
+    "radius": {
+      "card": "0.75rem",
+      "button": "9999px"
+    },
+    "motifs": "The 10Rs Coin Motif: Use circular, copper-tinted UI elements (e.g., circular icon wrappers with a subtle copper background `bg-[#C67A3D]/10 text-[#C67A3D]`)."
+  },
+  "layouts": {
+    "general": "Sidebar navigation (240px-280px) + Main Content Area. High-density grids for dashboard data. Mobile-first responsive.",
+    "grids": "Bento Grid Protocol. Top row: 4 columns for quick metrics (Balance, Collections, Donors, Beneficiaries). Middle row: 2 columns for 'Pending Approvals' and 'Recent Sadakah'.",
+    "forms": "Two-column grid for standard CRUD forms. Group fields (e.g., Personal Details vs. Loan Security Details) in distinct card sections with their own headings.",
+    "spacing": "Generous. p-6 or p-8 inside cards to avoid text collision."
+  },
+  "components": {
+    "button": "src/components/ui/button.jsx - Override default to pill-shape or rounded-md with Moss Green or Copper colors.",
+    "card": "src/components/ui/card.jsx - Flat solid surfaces, #FFFFFF, soft earthy shadow, #EAE5D9 border.",
+    "badge": "src/components/ui/badge.jsx - Custom variants for 'Active', 'Time Limit Exceed', 'Blocked'.",
+    "table": "src/components/ui/table.jsx - For Donors/Beneficiaries lists. Left-aligned, Outfit font.",
+    "sonner": "src/components/ui/sonner.jsx - For toast notifications.",
+    "dialog": "src/components/ui/dialog.jsx - Used for 'Corrections' and 'Approvals'."
+  },
+  "motion": {
+    "hover_states": "Cards lift slightly (-translate-y-1) + shadow increase. Buttons darken and scale up slightly (scale-105).",
+    "page_transitions": "Fade in + slight slide up (10px) for main content area.",
+    "lists": "Staggered entrance for rows in Reports or Donor lists."
+  },
+  "accessibility": {
+    "contrast": "Ensure white text on #244F35 has >4.5:1 ratio. Same for #C67A3D. Use tinted text #1A211C for dark elements.",
+    "focus": "focus:ring-2 focus:ring-[#C67A3D] focus:ring-offset-2 focus:ring-offset-[#FDFBF7]",
+    "testing": "All interactive elements MUST have data-testid attributes (e.g., data-testid='donor-submit-btn')."
+  },
+  "media": {
+    "icons": "Use @phosphor-icons/react (Duotone).",
+    "charts": "Use Recharts for 'Reports' and monthly collection trends.",
+    "3d_libraries": "Not strictly required for this admin dashboard. Use standard Recharts for data visualization to maintain data serenity."
+  },
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1567712595315-545da0d341b2",
+      "description": "Warm sunset mosque architecture. Use for the Login screen side-panel or background.",
+      "category": "Authentication / Branding"
+    },
+    {
+      "url": "https://images.pexels.com/photos/10638724/pexels-photo-10638724.jpeg",
+      "description": "Intimate hands reaching in warm light. Use as a banner image for the 'Sadakah (Donation)' module or empty states.",
+      "category": "Illustrative / Dashboard Banner"
+    },
+    {
+      "url": "https://images.pexels.com/photos/35431750/pexels-photo-35431750.jpeg",
+      "description": "Textured metal bowl with coins. Use as an abstract texture reference or background for the 'Accounts/Payment Collection' header.",
+      "category": "Texture / Motif"
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Use .jsx extensions for all React components. Do not use TypeScript (.tsx).",
+    "Ensure 'Cormorant Garamond' and 'Outfit' are loaded via Google Fonts.",
+    "Build the dashboard using Shadcn UI but aggressively override the default Vercel/SaaS aesthetic. Remove cold grays; use the defined earthy palette.",
+    "Implement a contact-number lookup field in the Donor/Beneficiary registration form that shows a loading spinner and validates uniqueness before submitting.",
+    "For the 'Kadan' and 'Vattiyilla Kadan' modules, clearly visually distinguish them. Highlight 'TIME LIMIT EXCEED' with the earthy red status color.",
+    "Include a month-picker (from-to) in the Payment Collection view.",
+    "Add 'data-testid' to ALL buttons, inputs, and key informational elements."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Avoid generic 'AI slop' aesthetics. Do not use centered alignments for forms or dense text.",
+    "Do not use dark colors as gradients. Use solid Moss Green or Copper.",
+    "Do not use complete transparent backgrounds for overlays, dropdowns, or headers. Always use solid or heavily blurred backgrounds.",
+    "Use Phosphor Icons (@phosphor-icons/react) for a high-end, duotone/regular look.",
+    "Ensure all transitions exclude transforms unless explicitly animating transforms (avoid 'transition: all').",
+    "Use Sonner for toasts."
+  ]
+}
