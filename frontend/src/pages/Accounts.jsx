@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, inr, formatDetail } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -15,7 +15,7 @@ export default function Accounts() {
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [s, o, p] = await Promise.all([
@@ -25,8 +25,8 @@ export default function Accounts() {
       ]);
       setSummary(s.data); setOutstanding(o.data); setPending(p.data);
     } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
+  }, [isAdmin]);
+  useEffect(() => { load(); }, [load]);
 
   const act = async (id, ok) => {
     try {
