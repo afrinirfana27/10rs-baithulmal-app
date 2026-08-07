@@ -811,10 +811,16 @@ async def on_shutdown():
 
 app.include_router(api)
 
+cors_origins = [origin.strip() for origin in os.environ.get(
+    'CORS_ORIGINS',
+    'https://10rs-baithulmal-app.vercel.app,http://localhost:3000,http://127.0.0.1:3000'
+).split(',') if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=cors_origins,
+    allow_origin_regex=r'https://.*\.vercel\.app',
     allow_methods=["*"],
     allow_headers=["*"],
 )
