@@ -9,12 +9,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus } from "@phosphor-icons/react";
+import { Plus, MagnifyingGlass } from "@phosphor-icons/react";
 
 export default function Sadakah() {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState([]);
+  const [filteredRows, setFilteredRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [beneficiary, setBeneficiary] = useState(null);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
@@ -22,9 +24,24 @@ export default function Sadakah() {
 
   const load = () => {
     setLoading(true);
-    api.get("/sadakah").then(r => setRows(r.data)).finally(() => setLoading(false));
+    api.get("/sadakah").then(r => { setRows(r.data); setFilteredRows(r.data); }).finally(() => setLoading(false));
   };
   useEffect(load, []);
+
+  const handleSearch = (query) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setFilteredRows(rows);
+      return;
+    }
+    const lowerQuery = query.toLowerCase();
+    const filtered = rows.filter(s =>
+      s.beneficiary?.name?.toLowerCase().includes(lowerQuery) ||
+      s.beneficiary?.contact?.includes(query) ||
+      s.note?.toLowerCase().includes(lowerQuery)
+    );
+    setFilteredRows(filtered);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -77,6 +94,19 @@ export default function Sadakah() {
           </Dialog>
         }
       />
+      <div className="card-earth mb-4 p-4">
+        <div className="flex gap-2 items-center">
+          <MagnifyingGlass size={18} className="text-[color:var(--text-muted)]" />
+          <Input
+            placeholder="Search by beneficiary name, contact, note..."
+            value={searchQuery}
+            onChange={e => handleSearch(e.target.value)}
+            data-testid="search-sadakah"
+            className="flex-1"
+          />
+          {searchQuery && <span className="text-xs text-[color:var(--text-muted)]">Found: {filteredRows.length}</span>}
+        </div>
+      </div>
       <div className="card-earth overflow-x-auto">
         <Table>
           <TableHeader>
@@ -89,8 +119,8 @@ export default function Sadakah() {
           </TableHeader>
           <TableBody>
             {loading ? <TableRow><TableCell colSpan={4} className="py-10 text-center text-[color:var(--text-muted)]">Loading…</TableCell></TableRow>
-              : rows.length === 0 ? <TableRow><TableCell colSpan={4} className="py-10 text-center text-[color:var(--text-muted)]">No sadakah recorded yet.</TableCell></TableRow>
-              : rows.map(s => (
+              : filteredRows.length === 0 ? <TableRow><TableCell colSpan={4} className="py-10 text-center text-[color:var(--text-muted)]" >{searchQuery ? "No matching sadakah." : "No sadakah recorded yet."}</TableCell></TableRow>
+              : filteredRows.map(s => (
                 <TableRow key={s.id} data-testid={`sadakah-row-${s.id}`}>
                   <TableCell><div className="font-medium">{s.beneficiary?.name}</div><div className="text-xs text-[color:var(--text-muted)]">{s.beneficiary?.contact}</div></TableCell>
                   <TableCell className="font-semibold text-copper">{inr(s.amount)}</TableCell>

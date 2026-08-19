@@ -41,7 +41,7 @@ def collector_creds(admin_client):
     email = f"collector_{TAG}@test.com"
     password = "coll1234"
     r = admin_client.post(f"{API}/admin/users", json={
-        "email": email, "password": password, "name": f"TEST_Collector_{TAG}", "role": "collector"
+        "email": email, "password": password, "name": f"TEST_Collector_{TAG}", "role": "payment_collector"
     })
     assert r.status_code == 200, r.text
     return {"email": email, "password": password, "id": r.json()["id"]}
@@ -85,7 +85,7 @@ class TestAuth:
         data = r.json()
         assert "token" in data and isinstance(data["token"], str)
         assert data["user"]["email"] == ADMIN_EMAIL
-        assert data["user"]["role"] == "admin"
+        assert data["user"]["role"] == "accountant_admin"
 
     def test_login_invalid(self):
         r = requests.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": "wrong"})
@@ -234,14 +234,14 @@ class TestPayments:
     def test_admin_creates_approved(self, admin_client, created_people):
         r = admin_client.post(f"{API}/payments", json={
             "donor_id": created_people["donors"]["id"],
-            "month_from": "2026-01", "month_to": "2026-03", "amount_per_month": 10.0
+            "collection_date": "2026-01-15", "amount_per_month": 10.0
         })
         assert r.status_code == 200, r.text
         p = r.json()
         assert p["status"] == "approved"
-        assert p["months"] == ["2026-01", "2026-02", "2026-03"]
-        assert p["total_amount"] == 30.0
-        assert p["receipt_no"].startswith("R")
+        assert p["collection_date"] == "2026-01-15"
+        assert p["total_amount"] == 10.0
+        assert p["receipt_no"].startswith("10RS")
 
     def test_collector_pending_and_approve(self, admin_client, collector_client, created_people):
         # collector needs another donor (unique contact each)
@@ -250,7 +250,7 @@ class TestPayments:
             "name": "TEST_D2", "father_name": "F", "address": "A", "contact": contact
         }).json()
         r = collector_client.post(f"{API}/payments", json={
-            "donor_id": d["id"], "month_from": "2026-02", "month_to": "2026-02", "amount_per_month": 10.0
+            "donor_id": d["id"], "collection_date": "2026-02-10", "amount_per_month": 10.0
         })
         assert r.status_code == 200
         assert r.json()["status"] == "pending"
@@ -263,10 +263,10 @@ class TestPayments:
         assert ap.status_code == 200
         assert ap.json()["status"] == "approved"
 
-    def test_invalid_range(self, admin_client, created_people):
+    def test_invalid_date(self, admin_client, created_people):
         r = admin_client.post(f"{API}/payments", json={
             "donor_id": created_people["donors"]["id"],
-            "month_from": "2026-05", "month_to": "2026-01", "amount_per_month": 10.0
+            "collection_date": "2026-13-40", "amount_per_month": 10.0
         })
         assert r.status_code == 400
 
@@ -347,7 +347,7 @@ class TestAdminUsers:
     def test_crud(self, admin_client):
         email = f"crud_{TAG}_{uuid.uuid4().hex[:4]}@test.com"
         c = admin_client.post(f"{API}/admin/users", json={
-            "email": email, "password": "pass1234", "name": "TEST_CRUD", "role": "collector"
+            "email": email, "password": "pass1234", "name": "TEST_CRUD", "role": "payment_collector"
         })
         assert c.status_code == 200
         uid = c.json()["id"]
@@ -376,6 +376,9 @@ class TestRBAC:
     def test_collector_forbidden_admin_endpoints(self, collector_client, created_people):
         # admin users list
         assert collector_client.get(f"{API}/admin/users").status_code == 403
+        assert collector_client.get(f"{API}/people/donors").status_code == 403
+        assert collector_client.get(f"{API}/loans").status_code == 403
+        assert collector_client.get(f"{API}/reports").status_code == 403
         # loan extend
         r = collector_client.post(f"{API}/loans/{uuid.uuid4()}/extend", json={"additional_months": 1})
         assert r.status_code == 403

@@ -71,18 +71,80 @@ async def get_current_user(request: Request) -> dict:
     return user
 
 
+# Roles: accountant_admin (full + approval), account_assistant (full, no approval),
+# payment_collector (collection entry only). Legacy aliases are still recognized.
+ROLE_ACCOUNTANT_ADMIN = "accountant_admin"
+ROLE_ACCOUNT_ASSISTANT = "account_assistant"
+ROLE_PAYMENT_COLLECTOR = "payment_collector"
+
+ACCOUNTANT_ADMIN_ROLES = {ROLE_ACCOUNTANT_ADMIN, "admin", "co-admin"}
+STAFF_ROLES = ACCOUNTANT_ADMIN_ROLES | {ROLE_ACCOUNT_ASSISTANT, "accountant"}
+COLLECTOR_ROLES = {ROLE_PAYMENT_COLLECTOR, "collector"}
+USER_ROLE_VALUES = Literal["accountant_admin", "account_assistant", "payment_collector"]
+
+
+def _role(user: dict) -> str:
+    return (user or {}).get("role") or ROLE_PAYMENT_COLLECTOR
+
+
+def is_accountant_admin(user: dict) -> bool:
+    return _role(user) in ACCOUNTANT_ADMIN_ROLES
+
+
+def is_staff(user: dict) -> bool:
+    return _role(user) in STAFF_ROLES
+
+
+def is_collector(user: dict) -> bool:
+    return _role(user) in COLLECTOR_ROLES
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    if not is_accountant_admin(user):
+        raise HTTPException(status_code=403, detail="Accountant Admin only")
     return user
+
+
+async def require_staff(user: dict = Depends(get_current_user)) -> dict:
+    if not is_staff(user):
+        raise HTTPException(status_code=403, detail="Staff access required")
+    return user
+
+
+async def require_accountant_admin(user: dict = Depends(get_current_user)) -> dict:
+    if not is_accountant_admin(user):
+        raise HTTPException(status_code=403, detail="Payment approval requires Accountant Admin")
+    return user
+
+
+# Backward-compatible alias used by older call sites
+require_accountant_or_admin = require_staff
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def today_ymd() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
 def new_id() -> str:
     return str(uuid.uuid4())
+
+
+def generate_person_serial(kind: str) -> str:
+    now = datetime.now(timezone.utc)
+    prefix = {"donors": "D", "beneficiaries": "B", "workers": "W"}[kind]
+    year_month = now.strftime("%Y%m")
+    count = awaitable_count = None
+    # This helper is used from async functions, so lookup is done in calling code.
+    return f"{prefix}{year_month}"
+
+
+def build_receipt_number() -> str:
+    now = datetime.now(timezone.utc)
+    return f"10RS{now.strftime('%Y%m')}{int(now.timestamp() * 1000) % 100000:05d}"
 
 
 # ---------------- Models ----------------
@@ -95,13 +157,13 @@ class UserCreate(BaseModel):
     email: str
     password: str
     name: str
-    role: Literal["admin", "collector"] = "collector"
+    role: USER_ROLE_VALUES = ROLE_PAYMENT_COLLECTOR
     permissions: List[str] = Field(default_factory=list)
 
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
-    role: Optional[Literal["admin", "collector"]] = None
+    role: Optional[USER_ROLE_VALUES] = None
     permissions: Optional[List[str]] = None
     password: Optional[str] = None
 
@@ -113,6 +175,9 @@ class PersonBase(BaseModel):
     address: str
     contact: str
     area: Optional[str] = ""
+    reference: Optional[str] = ""
+    aadhar_number: Optional[str] = ""
+    registration_date: Optional[str] = None
 
 
 class PersonUpdate(BaseModel):
@@ -121,6 +186,9 @@ class PersonUpdate(BaseModel):
     address: Optional[str] = None
     contact: Optional[str] = None
     area: Optional[str] = None
+    reference: Optional[str] = None
+    aadhar_number: Optional[str] = None
+    registration_date: Optional[str] = None
 
 
 class SecurityDetail(BaseModel):
@@ -164,8 +232,7 @@ class SadakahIn(BaseModel):
 
 class PaymentIn(BaseModel):
     donor_id: str
-    month_from: str  # YYYY-MM
-    month_to: str    # YYYY-MM
+    collection_date: str  # YYYY-MM-DD
     amount_per_month: float = 10.0
     note: Optional[str] = ""
 
@@ -191,14 +258,14 @@ async def login(data: LoginIn):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_token(user["id"], user["email"], user.get("role", "collector"))
+    token = create_token(user["id"], user["email"], user.get("role", ROLE_PAYMENT_COLLECTOR))
     return {
         "token": token,
         "user": {
             "id": user["id"],
             "email": user["email"],
             "name": user["name"],
-            "role": user.get("role", "collector"),
+            "role": user.get("role", ROLE_PAYMENT_COLLECTOR),
             "permissions": user.get("permissions", []),
         },
     }
@@ -267,20 +334,58 @@ COLLECTIONS = {"donors": "donors", "beneficiaries": "beneficiaries", "workers": 
 
 async def _next_serial(coll: str) -> str:
     prefix = {"donors": "D", "beneficiaries": "B", "workers": "W"}[coll]
-    count = await db[coll].count_documents({})
-    return f"{prefix}{(count + 1):04d}"
+    now = datetime.now(timezone.utc)
+    year_month = now.strftime("%Y%m")
+    match = {"$regex": f"^{prefix}{year_month}"}
+    count = await db[coll].count_documents({"serial": match})
+    return f"{prefix}{year_month}{(count + 1):04d}"
 
 
 @api.get("/people/{kind}/lookup")
-async def lookup_person(kind: str, contact: str):
+async def lookup_person(kind: str, contact: str, user: dict = Depends(get_current_user)):
     if kind not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown kind")
-    doc = await db[kind].find_one({"contact": contact.strip()}, {"_id": 0})
+    if is_collector(user) and kind != "donors":
+        raise HTTPException(status_code=403, detail="Payment Collectors may look up donors only")
+    key = contact.strip()
+    if not key:
+        return {"exists": False, "record": None}
+    doc = await db[kind].find_one({"contact": key}, {"_id": 0})
+    if doc:
+        return {"exists": True, "record": doc}
+    query = {"$or": [
+        {"name": {"$regex": key, "$options": "i"}},
+        {"father_name": {"$regex": key, "$options": "i"}},
+        {"reference": {"$regex": key, "$options": "i"}},
+    ]}
+    doc = await db[kind].find_one(query, {"_id": 0})
     return {"exists": bool(doc), "record": doc}
 
 
+@api.get("/people/{kind}/search")
+async def search_people(kind: str, q: Optional[str] = None, place: Optional[str] = None, user: dict = Depends(require_staff)):
+    if kind not in COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown kind")
+    query = {}
+    if q:
+        q = q.strip()
+        if q:
+            query["$or"] = [
+                {"contact": {"$regex": q, "$options": "i"}},
+                {"name": {"$regex": q, "$options": "i"}},
+                {"father_name": {"$regex": q, "$options": "i"}},
+                {"reference": {"$regex": q, "$options": "i"}},
+            ]
+    if place:
+        place = place.strip()
+        if place:
+            query["$and"] = query.get("$and", []) + [{"$or": [{"address": {"$regex": place, "$options": "i"}}, {"area": {"$regex": place, "$options": "i"}}]}]
+    docs = await db[kind].find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return docs
+
+
 @api.get("/people/{kind}")
-async def list_people(kind: str, user: dict = Depends(get_current_user)):
+async def list_people(kind: str, user: dict = Depends(require_staff)):
     if kind not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown kind")
     docs = await db[kind].find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
@@ -288,21 +393,34 @@ async def list_people(kind: str, user: dict = Depends(get_current_user)):
 
 
 @api.post("/people/{kind}")
-async def create_person(kind: str, data: PersonBase, user: dict = Depends(get_current_user)):
+async def create_person(kind: str, data: PersonBase, user: dict = Depends(require_staff)):
     if kind not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown kind")
     contact = data.contact.strip()
-    existing = await db[kind].find_one({"contact": contact})
+    name = data.name.strip()
+    father = data.father_name.strip()
+    aadhaar = (data.aadhar_number or "").strip()
+    reference = (data.reference or "").strip()
+    registration_date = (data.registration_date or today_ymd())
+    duplicate_query = {"$or": [{"contact": contact}]}
+    if aadhaar:
+        duplicate_query["$or"].append({"aadhar_number": aadhaar})
+    if name and father:
+        duplicate_query["$or"].append({"name": name, "father_name": father})
+    existing = await db[kind].find_one({"$or": duplicate_query["$or"]})
     if existing:
-        raise HTTPException(status_code=400, detail=f"{kind[:-1].title()} with this contact already exists")
+        raise HTTPException(status_code=400, detail=f"Duplicate {kind[:-1].title()} entry detected")
     doc = {
         "id": new_id(),
         "serial": await _next_serial(kind),
-        "name": data.name.strip(),
-        "father_name": data.father_name.strip(),
+        "name": name,
+        "father_name": father,
         "address": data.address.strip(),
         "contact": contact,
         "area": (data.area or "").strip(),
+        "reference": reference,
+        "aadhar_number": aadhaar,
+        "registration_date": registration_date,
         "created_at": now_iso(),
     }
     await db[kind].insert_one(doc)
@@ -311,7 +429,7 @@ async def create_person(kind: str, data: PersonBase, user: dict = Depends(get_cu
 
 
 @api.get("/people/{kind}/{pid}")
-async def get_person(kind: str, pid: str, user: dict = Depends(get_current_user)):
+async def get_person(kind: str, pid: str, user: dict = Depends(require_staff)):
     if kind not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown kind")
     doc = await db[kind].find_one({"id": pid}, {"_id": 0})
@@ -321,7 +439,7 @@ async def get_person(kind: str, pid: str, user: dict = Depends(get_current_user)
 
 
 @api.patch("/people/{kind}/{pid}")
-async def update_person(kind: str, pid: str, data: PersonUpdate, user: dict = Depends(get_current_user)):
+async def update_person(kind: str, pid: str, data: PersonUpdate, user: dict = Depends(require_staff)):
     if kind not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown kind")
     updates = {k: v.strip() if isinstance(v, str) else v for k, v in data.model_dump(exclude_none=True).items()}
@@ -361,7 +479,7 @@ def _compute_loan_status(loan: dict) -> dict:
 
 
 @api.get("/loans")
-async def list_loans(kadan_type: Optional[str] = None, user: dict = Depends(get_current_user)):
+async def list_loans(kadan_type: Optional[str] = None, user: dict = Depends(require_staff)):
     q = {}
     if kadan_type:
         q["kadan_type"] = kadan_type
@@ -372,7 +490,7 @@ async def list_loans(kadan_type: Optional[str] = None, user: dict = Depends(get_
 
 
 @api.post("/loans")
-async def create_loan(data: KadanIn, user: dict = Depends(get_current_user)):
+async def create_loan(data: KadanIn, user: dict = Depends(require_staff)):
     beneficiary = await db.beneficiaries.find_one({"id": data.beneficiary_id}, {"_id": 0})
     if not beneficiary:
         raise HTTPException(status_code=404, detail="Beneficiary not found")
@@ -403,7 +521,7 @@ async def create_loan(data: KadanIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/loans/{lid}")
-async def get_loan(lid: str, user: dict = Depends(get_current_user)):
+async def get_loan(lid: str, user: dict = Depends(require_staff)):
     doc = await db.loans.find_one({"id": lid}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
@@ -411,7 +529,7 @@ async def get_loan(lid: str, user: dict = Depends(get_current_user)):
 
 
 @api.post("/loans/{lid}/repay")
-async def repay_loan(lid: str, data: RepaymentIn, user: dict = Depends(get_current_user)):
+async def repay_loan(lid: str, data: RepaymentIn, user: dict = Depends(require_staff)):
     loan = await db.loans.find_one({"id": lid})
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
@@ -432,7 +550,7 @@ async def repay_loan(lid: str, data: RepaymentIn, user: dict = Depends(get_curre
 
 
 @api.post("/loans/{lid}/extend")
-async def extend_loan(lid: str, data: ExtendIn, admin: dict = Depends(require_admin)):
+async def extend_loan(lid: str, data: ExtendIn, admin: dict = Depends(require_staff)):
     loan = await db.loans.find_one({"id": lid})
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
@@ -452,7 +570,7 @@ async def extend_loan(lid: str, data: ExtendIn, admin: dict = Depends(require_ad
 
 
 @api.post("/loans/{lid}/block")
-async def block_loan(lid: str, data: BlockIn, admin: dict = Depends(require_admin)):
+async def block_loan(lid: str, data: BlockIn, admin: dict = Depends(require_staff)):
     loan = await db.loans.find_one({"id": lid})
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
@@ -469,7 +587,7 @@ async def block_loan(lid: str, data: BlockIn, admin: dict = Depends(require_admi
 
 
 @api.post("/loans/{lid}/unblock")
-async def unblock_loan(lid: str, admin: dict = Depends(require_admin)):
+async def unblock_loan(lid: str, admin: dict = Depends(require_staff)):
     await db.loans.update_one({"id": lid}, {"$set": {"status": "active", "block_info": None}})
     doc = await db.loans.find_one({"id": lid}, {"_id": 0})
     return _compute_loan_status(doc)
@@ -477,12 +595,12 @@ async def unblock_loan(lid: str, admin: dict = Depends(require_admin)):
 
 # ---------------- Sadakah ----------------
 @api.get("/sadakah")
-async def list_sadakah(user: dict = Depends(get_current_user)):
+async def list_sadakah(user: dict = Depends(require_staff)):
     return await db.sadakah.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/sadakah")
-async def create_sadakah(data: SadakahIn, user: dict = Depends(get_current_user)):
+async def create_sadakah(data: SadakahIn, user: dict = Depends(require_staff)):
     beneficiary = await db.beneficiaries.find_one({"id": data.beneficiary_id}, {"_id": 0})
     if not beneficiary:
         raise HTTPException(status_code=404, detail="Beneficiary not found")
@@ -499,31 +617,34 @@ async def create_sadakah(data: SadakahIn, user: dict = Depends(get_current_user)
     return doc
 
 
-# ---------------- Payments (donor monthly contribution) ----------------
-def _months_between(start: str, end: str) -> List[str]:
-    """Return list of YYYY-MM strings inclusive between start and end."""
-    sy, sm = int(start[:4]), int(start[5:7])
-    ey, em = int(end[:4]), int(end[5:7])
-    months = []
-    y, m = sy, sm
-    while (y, m) <= (ey, em):
-        months.append(f"{y:04d}-{m:02d}")
-        m += 1
-        if m > 12:
-            m = 1
-            y += 1
-        if len(months) > 240:
-            break
-    return months
+# ---------------- Payments (donor collection by date) ----------------
+def _parse_ymd(value: str, field: str = "collection_date") -> str:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field} must be YYYY-MM-DD")
+    return value
 
 
 @api.get("/payments")
-async def list_payments(user: dict = Depends(get_current_user)):
-    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+async def list_payments(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    query = {}
+    date_filter = {}
+    if date_from:
+        date_filter["$gte"] = _parse_ymd(date_from, "date_from")
+    if date_to:
+        date_filter["$lte"] = _parse_ymd(date_to, "date_to")
+    if date_filter:
+        query["collection_date"] = date_filter
+    return await db.payments.find(query, {"_id": 0}).sort("collection_date", -1).to_list(5000)
 
 
 @api.get("/payments/pending")
-async def list_pending_payments(admin: dict = Depends(require_admin)):
+async def list_pending_payments(admin: dict = Depends(require_accountant_admin)):
     return await db.payments.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
@@ -532,43 +653,46 @@ async def create_payment(data: PaymentIn, user: dict = Depends(get_current_user)
     donor = await db.donors.find_one({"id": data.donor_id}, {"_id": 0})
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
-    months = _months_between(data.month_from, data.month_to)
-    if not months:
-        raise HTTPException(status_code=400, detail="Invalid month range")
-    total = float(data.amount_per_month) * len(months)
-    # Collector creates pending; admin auto-approves
-    is_admin = user.get("role") == "admin"
+    collection_date = _parse_ymd(data.collection_date)
+    amount = float(data.amount_per_month)
+    auto_approve = user.get("role") == ROLE_ACCOUNTANT_ADMIN
     doc = {
         "id": new_id(),
-        "receipt_no": f"R{int(datetime.now(timezone.utc).timestamp())}",
+        "receipt_no": build_receipt_number(),
         "donor": donor,
-        "month_from": data.month_from,
-        "month_to": data.month_to,
-        "months": months,
-        "amount_per_month": float(data.amount_per_month),
-        "total_amount": total,
+        "collection_date": collection_date,
+        "amount_per_month": amount,
+        "total_amount": amount,
         "note": data.note or "",
-        "status": "approved" if is_admin else "pending",
+        "status": "approved" if auto_approve else "pending",
         "collected_by": user["id"],
         "collected_by_name": user.get("name", ""),
         "created_at": now_iso(),
-        "approved_at": now_iso() if is_admin else None,
-        "approved_by": user["id"] if is_admin else None,
+        "approved_at": now_iso() if auto_approve else None,
+        "approved_by": user["id"] if auto_approve else None,
     }
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
 
+@api.delete("/payments/{pid}")
+async def delete_payment(pid: str, user: dict = Depends(require_staff)):
+    result = await db.payments.delete_one({"id": pid})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return {"ok": True}
+
+
 @api.post("/payments/{pid}/approve")
-async def approve_payment(pid: str, data: ApprovalActionIn, admin: dict = Depends(require_admin)):
+async def approve_payment(pid: str, data: ApprovalActionIn, user: dict = Depends(require_accountant_admin)):
     p = await db.payments.find_one({"id": pid})
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
     updates = {
         "status": "approved" if data.approve else "rejected",
         "approved_at": now_iso(),
-        "approved_by": admin["id"],
+        "approved_by": user["id"],
         "approval_note": data.note or "",
     }
     await db.payments.update_one({"id": pid}, {"$set": updates})
@@ -578,12 +702,12 @@ async def approve_payment(pid: str, data: ApprovalActionIn, admin: dict = Depend
 
 # ---------------- Expenses ----------------
 @api.get("/expenses")
-async def list_expenses(user: dict = Depends(get_current_user)):
+async def list_expenses(user: dict = Depends(require_staff)):
     return await db.expenses.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/expenses")
-async def create_expense(data: ExpenseIn, user: dict = Depends(get_current_user)):
+async def create_expense(data: ExpenseIn, user: dict = Depends(require_staff)):
     worker = None
     if data.worker_id:
         worker = await db.workers.find_one({"id": data.worker_id}, {"_id": 0})
@@ -607,7 +731,7 @@ async def create_expense(data: ExpenseIn, user: dict = Depends(get_current_user)
 
 # ---------------- Accounts / Dashboard ----------------
 @api.get("/accounts/summary")
-async def accounts_summary(fund: str = "baithulmal", user: dict = Depends(get_current_user)):
+async def accounts_summary(fund: str = "baithulmal", user: dict = Depends(require_staff)):
     """fund: 'baithulmal' (main) or 'vattiyilla' (interest-free)."""
     is_vatti = fund == "vattiyilla"
     loan_type_filter = "vattiyilla" if is_vatti else "kadan"
@@ -679,6 +803,8 @@ async def accounts_summary(fund: str = "baithulmal", user: dict = Depends(get_cu
     donors_count = await db.donors.count_documents({})
     workers_count = await db.workers.count_documents({})
 
+    distributed_total = total_expense + total_sadakah
+    loan_outstanding = total_loan - total_loan_paid
     return {
         "fund": "baithulmal",
         "balance": balance,
@@ -686,7 +812,9 @@ async def accounts_summary(fund: str = "baithulmal", user: dict = Depends(get_cu
         "total_pending": total_pending,
         "total_expense": total_expense,
         "total_sadakah": total_sadakah,
-        "total_loan_outstanding": total_loan - total_loan_paid,
+        "distributed_total": distributed_total,
+        "loan_outstanding": loan_outstanding,
+        "total_loan_outstanding": loan_outstanding,
         "donors_count": donors_count,
         "beneficiaries_count": beneficiaries_count,
         "workers_count": workers_count,
@@ -696,7 +824,7 @@ async def accounts_summary(fund: str = "baithulmal", user: dict = Depends(get_cu
 
 
 @api.get("/accounts/user-outstanding")
-async def user_outstanding(admin: dict = Depends(require_admin)):
+async def user_outstanding(admin: dict = Depends(require_staff)):
     """List collectors and their pending (outstanding) payment totals."""
     pipeline = [
         {"$match": {"status": "pending"}},
@@ -714,7 +842,7 @@ async def user_outstanding(admin: dict = Depends(require_admin)):
 # ---------------- Reports ----------------
 @api.get("/reports")
 async def report(range: str = "daily", start: Optional[str] = None, end: Optional[str] = None,
-                 donor_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+                 donor_id: Optional[str] = None, user: dict = Depends(require_staff)):
     """range: daily|monthly|yearly|custom|individual"""
     now = datetime.now(timezone.utc)
     if range == "daily":
@@ -746,7 +874,11 @@ async def report(range: str = "daily", start: Optional[str] = None, end: Optiona
         raise HTTPException(status_code=400, detail="Invalid range")
 
     s_iso, e_iso = s.isoformat(), e.isoformat()
-    payments = await db.payments.find({"created_at": {"$gte": s_iso, "$lt": e_iso}, "status": "approved"}, {"_id": 0}).to_list(5000)
+    s_ymd, e_ymd = s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")
+    payments = await db.payments.find(
+        {"collection_date": {"$gte": s_ymd, "$lt": e_ymd}, "status": "approved"},
+        {"_id": 0},
+    ).to_list(5000)
     expenses = await db.expenses.find({"created_at": {"$gte": s_iso, "$lt": e_iso}}, {"_id": 0}).to_list(5000)
     sadakah = await db.sadakah.find({"created_at": {"$gte": s_iso, "$lt": e_iso}}, {"_id": 0}).to_list(5000)
     loans = await db.loans.find({"created_at": {"$gte": s_iso, "$lt": e_iso}}, {"_id": 0}).to_list(5000)
@@ -794,14 +926,22 @@ async def on_start():
             "email": admin_email,
             "password_hash": hash_password(admin_password),
             "name": "Administrator",
-            "role": "admin",
+            "role": ROLE_ACCOUNTANT_ADMIN,
             "permissions": ["*"],
             "created_at": now_iso(),
         })
         logger.info(f"Seeded admin: {admin_email}")
-    elif not verify_password(admin_password, existing.get("password_hash", "")):
-        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
-        logger.info("Updated admin password from env")
+    else:
+        updates = {}
+        if existing.get("role") in {"admin", "co-admin", "accountant", None, ""}:
+            updates["role"] = ROLE_ACCOUNTANT_ADMIN
+        if not verify_password(admin_password, existing.get("password_hash", "")):
+            updates["password_hash"] = hash_password(admin_password)
+        if updates:
+            await db.users.update_one({"email": admin_email}, {"$set": updates})
+            logger.info("Updated seeded Accountant Admin from env")
+    await db.users.update_many({"role": "collector"}, {"$set": {"role": ROLE_PAYMENT_COLLECTOR}})
+    await db.users.update_many({"role": "accountant"}, {"$set": {"role": ROLE_ACCOUNT_ASSISTANT}})
 
 
 @app.on_event("shutdown")

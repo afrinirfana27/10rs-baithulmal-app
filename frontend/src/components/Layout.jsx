@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "@/context/AuthContext";
+import { isAccountantAdmin, isCollector, roleLabel, useAuth } from "@/context/AuthContext";
 import { Toaster } from "@/components/ui/sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import {
@@ -11,23 +11,23 @@ import {
 
 const nav = [
   // 10Rs Baithulmal (main fund)
-  { to: "/", icon: House, label: "Dashboard", testid: "nav-dashboard", end: true, group: "Baithulmal" },
-  { to: "/donors", icon: HandHeart, label: "Donors", testid: "nav-donors", group: "Baithulmal" },
-  { to: "/beneficiaries", icon: UsersThree, label: "Beneficiaries", testid: "nav-beneficiaries", group: "Baithulmal" },
+  { to: "/", icon: House, label: "Dashboard", testid: "nav-dashboard", end: true, group: "Baithulmal", staffOnly: true },
+  { to: "/donors", icon: HandHeart, label: "Donors", testid: "nav-donors", group: "Baithulmal", staffOnly: true },
+  { to: "/beneficiaries", icon: UsersThree, label: "Beneficiaries", testid: "nav-beneficiaries", group: "Baithulmal", staffOnly: true },
   { to: "/payments", icon: Coins, label: "Payments", testid: "nav-payments", group: "Baithulmal" },
-  { to: "/kadan", icon: HandCoins, label: "Kadan (Loan)", testid: "nav-kadan", group: "Baithulmal" },
-  { to: "/sadakah", icon: HandHeart, label: "Sadakah", testid: "nav-sadakah", group: "Baithulmal" },
-  { to: "/accounts", icon: Bank, label: "Accounts", testid: "nav-accounts", group: "Baithulmal" },
+  { to: "/kadan", icon: HandCoins, label: "Kadan (Loan)", testid: "nav-kadan", group: "Baithulmal", staffOnly: true },
+  { to: "/sadakah", icon: HandHeart, label: "Sadakah", testid: "nav-sadakah", group: "Baithulmal", staffOnly: true },
+  { to: "/accounts", icon: Bank, label: "Accounts", testid: "nav-accounts", group: "Baithulmal", staffOnly: true },
 
   // Vattiyilla Kadan (separate fund)
-  { to: "/vattiyilla", icon: HandCoins, label: "V-Dashboard", testid: "nav-v-dashboard", group: "Vattiyilla" },
-  { to: "/vattiyilla-loans", icon: HandCoins, label: "V-Loans", testid: "nav-vattiyilla", group: "Vattiyilla" },
-  { to: "/vattiyilla-accounts", icon: Bank, label: "V-Accounts", testid: "nav-v-accounts", group: "Vattiyilla" },
+  { to: "/vattiyilla", icon: HandCoins, label: "V-Dashboard", testid: "nav-v-dashboard", group: "Vattiyilla", staffOnly: true },
+  { to: "/vattiyilla-loans", icon: HandCoins, label: "V-Loans", testid: "nav-vattiyilla", group: "Vattiyilla", staffOnly: true },
+  { to: "/vattiyilla-accounts", icon: Bank, label: "V-Accounts", testid: "nav-v-accounts", group: "Vattiyilla", staffOnly: true },
 
   // Shared
-  { to: "/workers", icon: Users, label: "Workers", testid: "nav-workers", group: "Shared" },
-  { to: "/expenses", icon: Receipt, label: "Expenses", testid: "nav-expenses", group: "Shared" },
-  { to: "/reports", icon: ChartBar, label: "Reports", testid: "nav-reports", group: "Shared" },
+  { to: "/workers", icon: Users, label: "Workers", testid: "nav-workers", group: "Shared", staffOnly: true },
+  { to: "/expenses", icon: Receipt, label: "Expenses", testid: "nav-expenses", group: "Shared", staffOnly: true },
+  { to: "/reports", icon: ChartBar, label: "Reports", testid: "nav-reports", group: "Shared", staffOnly: true },
   { to: "/admin", icon: GearSix, label: "Admin", testid: "nav-admin", adminOnly: true, group: "Shared" },
 ];
 
@@ -48,7 +48,9 @@ function SidebarContent({ user, logout, onNavigate }) {
 
       <nav className="px-3 flex-1 overflow-y-auto pb-6">
         {["Baithulmal", "Vattiyilla", "Shared"].map(group => {
-          const items = nav.filter(n => n.group === group && (!n.adminOnly || user?.role === "admin"));
+          const items = nav.filter(n => n.group === group
+            && (!n.adminOnly || isAccountantAdmin(user))
+            && (!n.staffOnly || !isCollector(user)));
           if (items.length === 0) return null;
           return (
             <div key={group} className="mb-4">
@@ -79,7 +81,7 @@ function SidebarContent({ user, logout, onNavigate }) {
       <div className="px-4 pb-6 border-t border-earth pt-4 mx-3">
         <div className="text-xs text-[color:var(--text-muted)] uppercase tracking-wider">Signed in as</div>
         <div className="mt-1 font-medium text-[color:var(--text-primary)]">{user?.name}</div>
-        <div className="text-xs text-[color:var(--text-secondary)] capitalize">{user?.role}</div>
+        <div className="text-xs text-[color:var(--text-secondary)]">{roleLabel(user?.role)}</div>
         <button
           onClick={logout}
           data-testid="logout-btn"
@@ -92,8 +94,18 @@ function SidebarContent({ user, logout, onNavigate }) {
   );
 }
 
-function BottomNav({ location }) {
+function BottomNav({ location, user }) {
   const path = location.pathname;
+  if (isCollector(user)) {
+    return (
+      <div className="bottom-nav lg:hidden" data-testid="mobile-bottom-nav">
+        <NavLink to="/payments" className={path.startsWith("/payments") ? "active" : ""} data-testid="bn-payments">
+          <Coins size={22} weight={path.startsWith("/payments") ? "fill" : "regular"} className="bn-icon" />
+          <span>Payments</span>
+        </NavLink>
+      </div>
+    );
+  }
   const isHome = path === "/";
   const isDir = DIRECTORY_ROUTES.some(r => path.startsWith(r));
   const isLed = LEDGER_ROUTES.some(r => path.startsWith(r));
@@ -168,7 +180,7 @@ export default function Layout() {
         </main>
       </div>
 
-      <BottomNav location={location} />
+      <BottomNav location={location} user={user} />
       <Toaster position="top-right" richColors />
     </div>
   );

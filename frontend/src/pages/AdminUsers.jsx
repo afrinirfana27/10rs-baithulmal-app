@@ -8,20 +8,37 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus } from "@phosphor-icons/react";
-import { useAuth } from "@/context/AuthContext";
+import { Plus, MagnifyingGlass } from "@phosphor-icons/react";
+import { ROLES, roleLabel, useAuth } from "@/context/AuthContext";
 
 const PERMISSIONS = ["donors.write", "beneficiaries.write", "payments.write", "loans.write", "sadakah.write", "expenses.write"];
 
 export default function AdminUsers() {
   const { user } = useAuth();
   const [rows, setRows] = useState([]);
+  const [filteredRows, setFilteredRows] = useState([]);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ email: "", password: "", name: "", role: "collector", permissions: [] });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [form, setForm] = useState({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [] });
   const [editing, setEditing] = useState(null);
 
-  const load = () => api.get("/admin/users").then(r => setRows(r.data));
+  const load = () => api.get("/admin/users").then(r => { setRows(r.data); setFilteredRows(r.data); });
   useEffect(() => { load(); }, []);
+
+  const handleSearch = (query) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setFilteredRows(rows);
+      return;
+    }
+    const lowerQuery = query.toLowerCase();
+    const filtered = rows.filter(u =>
+      u.name?.toLowerCase().includes(lowerQuery) ||
+      u.email?.toLowerCase().includes(lowerQuery) ||
+      u.role?.toLowerCase().includes(lowerQuery)
+    );
+    setFilteredRows(filtered);
+  };
 
   const save = async (e) => {
     e.preventDefault();
@@ -36,7 +53,7 @@ export default function AdminUsers() {
         toast.success("User created");
       }
       setOpen(false); setEditing(null);
-      setForm({ email: "", password: "", name: "", role: "collector", permissions: [] });
+      setForm({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [] });
       load();
     } catch (e) { toast.error(formatDetail(e.response?.data?.detail)); }
   };
@@ -59,9 +76,9 @@ export default function AdminUsers() {
     <div data-testid="admin-page">
       <PageHeader
         title="Admin · Users"
-        subtitle="Create collector logins, manage permissions, correct records."
+        subtitle="Create Accountant Admin, Account Assistant, and Payment Collector logins."
         action={
-          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditing(null); setForm({ email: "", password: "", name: "", role: "collector", permissions: [] }); } }}>
+          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditing(null); setForm({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [] }); } }}>
             <DialogTrigger asChild>
               <Button className="btn-accent-copper rounded-full px-5 py-6" data-testid="add-user-btn">
                 <Plus size={16} weight="bold" className="mr-2" /> Add User
@@ -87,8 +104,9 @@ export default function AdminUsers() {
                   <Select value={form.role} onValueChange={v => setForm({ ...form, role: v })}>
                     <SelectTrigger data-testid="user-role"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="admin">Admin</SelectItem>
-                      <SelectItem value="collector">Collector</SelectItem>
+                      <SelectItem value={ROLES.ACCOUNTANT_ADMIN}>Accountant – Admin</SelectItem>
+                      <SelectItem value={ROLES.ACCOUNT_ASSISTANT}>Account Assistant</SelectItem>
+                      <SelectItem value={ROLES.PAYMENT_COLLECTOR}>Payment Collector</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -109,7 +127,19 @@ export default function AdminUsers() {
           </Dialog>
         }
       />
-
+      <div className="card-earth mb-4 p-4">
+        <div className="flex gap-2 items-center">
+          <MagnifyingGlass size={18} className="text-[color:var(--text-muted)]" />
+          <Input
+            placeholder="Search by name, email, role..."
+            value={searchQuery}
+            onChange={e => handleSearch(e.target.value)}
+            data-testid="search-users"
+            className="flex-1"
+          />
+          {searchQuery && <span className="text-xs text-[color:var(--text-muted)]">Found: {filteredRows.length}</span>}
+        </div>
+      </div>
       <div className="card-earth overflow-x-auto">
         <Table>
           <TableHeader>
@@ -118,11 +148,11 @@ export default function AdminUsers() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map(u => (
+            {filteredRows.map(u => (
               <TableRow key={u.id} data-testid={`user-row-${u.id}`}>
                 <TableCell className="font-medium">{u.name}</TableCell>
                 <TableCell>{u.email}</TableCell>
-                <TableCell className="capitalize">{u.role}</TableCell>
+                <TableCell>{roleLabel(u.role)}</TableCell>
                 <TableCell className="text-xs text-[color:var(--text-muted)]">{(u.permissions || []).join(", ") || "—"}</TableCell>
                 <TableCell className="text-right space-x-1">
                   <Button size="sm" variant="ghost" onClick={() => editUser(u)} data-testid={`edit-${u.id}`}>Edit</Button>

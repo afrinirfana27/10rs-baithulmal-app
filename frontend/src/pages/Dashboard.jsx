@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, inr } from "@/lib/api";
-import { useAuth } from "@/context/AuthContext";
+import { roleLabel, useAuth } from "@/context/AuthContext";
 import {
   CalendarBlank, Clock, UsersThree, HandHeart, Users, Receipt,
   ArrowDown, ArrowUp, UserPlus, Heart, HandCoins
@@ -26,7 +26,7 @@ export default function Dashboard() {
         <div>
           <div className="text-[color:var(--text-secondary)] text-base">Assalamu Alaikum</div>
           <div className="mt-1 text-[22px] sm:text-2xl font-bold text-[color:var(--text-primary)] leading-tight">
-            {user?.name?.split(" ")[0] || "Admin"} · <span className="capitalize">{user?.role}</span>
+            {user?.name?.split(" ")[0] || "Admin"} · <span>{roleLabel(user?.role)}</span>
           </div>
         </div>
         <div className="w-12 h-12 rounded-full bg-[rgba(21,122,69,0.15)] flex items-center justify-center text-moss">
@@ -59,6 +59,16 @@ export default function Dashboard() {
             <div className="mt-1.5 text-xl font-semibold">
               {inr((s?.total_expense || 0) + (s?.total_sadakah || 0))}
             </div>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-2 divide-x divide-white/25">
+          <div className="pr-4">
+            <div className="text-white/85 text-sm">Loan Outstanding</div>
+            <div className="mt-1.5 text-xl font-semibold">{inr(s?.loan_outstanding || s?.total_loan_outstanding || 0)}</div>
+          </div>
+          <div className="pl-4">
+            <div className="text-white/85 text-sm">V Kadan (Loan)</div>
+            <div className="mt-1.5 text-xl font-semibold">{inr(s?.loan_outstanding || s?.total_loan_outstanding || 0)}</div>
           </div>
         </div>
       </div>

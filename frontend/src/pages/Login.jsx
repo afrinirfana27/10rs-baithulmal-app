@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAuth } from "@/context/AuthContext";
+import { isCollector, useAuth } from "@/context/AuthContext";
 import { useNavigate, Navigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,15 +14,15 @@ export default function Login() {
   const [password, setPassword] = useState("admin123");
   const [busy, setBusy] = useState(false);
 
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to={isCollector(user) ? "/payments" : "/"} replace />;
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await login(email.trim(), password);
+      const loggedIn = await login(email.trim(), password);
       toast.success("Welcome back");
-      nav("/");
+      nav(isCollector(loggedIn) ? "/payments" : "/");
     } catch (err) {
       toast.error(formatDetail(err.response?.data?.detail) || err.message);
     } finally { setBusy(false); }

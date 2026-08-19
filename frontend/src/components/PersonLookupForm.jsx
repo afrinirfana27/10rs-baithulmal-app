@@ -13,26 +13,46 @@ const singularKind = { donors: "donor", beneficiaries: "beneficiary", workers: "
  * kind: 'donors' | 'beneficiaries' | 'workers'
  * onSaved(person)
  */
-export default function PersonLookupForm({ kind, onSaved, hideOnFound = false }) {
+export default function PersonLookupForm({ kind, onSaved, hideOnFound = false, allowCreate = true }) {
   const [contact, setContact] = useState("");
   const [checking, setChecking] = useState(false);
   const [found, setFound] = useState(null); // record if exists
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", father_name: "", address: "", area: "" });
+  const [form, setForm] = useState({ name: "", father_name: "", address: "", area: "", reference: "", aadhar_number: "" });
   const [saving, setSaving] = useState(false);
+  const [contactError, setContactError] = useState("");
+  const [aadharError, setAadharError] = useState("");
 
   const noun = singularKind[kind] || kind;
 
+  const validateContact = (val) => {
+    if (!/^\d{10}$/.test(val.replace(/\D/g, ''))) {
+      return "Phone number must be 10 digits";
+    }
+    return "";
+  };
+
+  const validateAadhar = (val) => {
+    if (val && !/^\d{12}$/.test(val.replace(/\D/g, ''))) {
+      return "Aadhar must be 12 digits";
+    }
+    return "";
+  };
+
   const doLookup = async () => {
-    if (!contact.trim()) { toast.error("Enter contact number"); return; }
+    const err = validateContact(contact);
+    if (err) { setContactError(err); toast.error(err); return; }
+    setContactError("");
     setChecking(true); setFound(null); setShowForm(false);
     try {
       const { data } = await api.get(`/people/${kind}/lookup`, { params: { contact: contact.trim() } });
       if (data.exists) {
         setFound(data.record);
         if (hideOnFound) onSaved?.(data.record);
-      } else {
+      } else if (allowCreate) {
         setShowForm(true);
+      } else {
+        toast.error(`No ${noun} found. Ask an Account Assistant or Accountant Admin to register them.`);
       }
     } catch (e) {
       toast.error(formatDetail(e.response?.data?.detail));
@@ -41,10 +61,17 @@ export default function PersonLookupForm({ kind, onSaved, hideOnFound = false })
 
   const doSave = async (e) => {
     e.preventDefault();
+    const contactErr = validateContact(contact);
+    const aadharErr = validateAadhar(form.aadhar_number);
+    if (contactErr || aadharErr) {
+      toast.error(contactErr || aadharErr);
+      return;
+    }
     setSaving(true);
     try {
       const { data } = await api.post(`/people/${kind}`, { ...form, contact: contact.trim() });
-      toast.success(`${noun} registered`);
+      toast.success(`${noun} registered - ID: ${data.serial}`);
+      console.log("✅ Registered:", data);
       setFound(data);
       setShowForm(false);
       onSaved?.(data);
@@ -55,21 +82,25 @@ export default function PersonLookupForm({ kind, onSaved, hideOnFound = false })
 
   const reset = () => {
     setContact(""); setFound(null); setShowForm(false);
-    setForm({ name: "", father_name: "", address: "", area: "" });
+    setForm({ name: "", father_name: "", address: "", area: "", reference: "", aadhar_number: "" });
   };
 
   return (
     <div className="space-y-4" data-testid={`lookup-${kind}`}>
       <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
         <div className="flex-1">
-          <Label>Contact Number</Label>
+          <Label>Contact Number <span className="text-red-500">*</span> (10 digits)</Label>
           <Input
             data-testid="lookup-contact"
             value={contact}
             onChange={e => setContact(e.target.value)}
             placeholder="e.g. 9876543210"
+            pattern="\d{10}"
+            maxLength="10"
             onKeyDown={e => e.key === "Enter" && doLookup()}
+            className={contactError ? "border-red-500" : ""}
           />
+          {contactError && <div className="text-xs text-red-500 mt-1">{contactError}</div>}
         </div>
         <div className="flex gap-2">
           <Button
@@ -86,18 +117,26 @@ export default function PersonLookupForm({ kind, onSaved, hideOnFound = false })
       </div>
 
       {found && (
-        <div className="card-earth p-5 flex items-start gap-4" data-testid="lookup-found">
-          <div className="coin-badge shrink-0">{found.serial?.charAt(0) || "•"}</div>
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <CheckCircle size={18} weight="fill" className="text-[#2D7A4D]" />
-              <div className="font-semibold text-[color:var(--text-primary)]">{found.name}</div>
-              <span className="text-xs text-[color:var(--text-muted)]">#{found.serial}</span>
+        <div className="card-earth p-5 space-y-3" data-testid="lookup-found">
+          <div className="flex items-start gap-4">
+            <div className="coin-badge shrink-0">{found.serial?.charAt(0) || "•"}</div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <CheckCircle size={18} weight="fill" className="text-[#2D7A4D]" />
+                <div className="font-semibold text-[color:var(--text-primary)]">{found.name}</div>
+                <span className="text-xs text-[color:var(--text-muted)]">#{found.serial}</span>
+              </div>
+              <div className="mt-1 text-sm text-[color:var(--text-secondary)]">
+                Father: {found.father_name} · {found.contact}
+              </div>
             </div>
-            <div className="mt-1 text-sm text-[color:var(--text-secondary)]">
-              Father: {found.father_name} · {found.address} · {found.contact}
-              {found.area && <> · Area: {found.area}</>}
-            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm border-t pt-3">
+            <div><span className="font-medium">Address:</span> {found.address}</div>
+            <div><span className="font-medium">Area:</span> {found.area || "—"}</div>
+            <div><span className="font-medium">Reference:</span> {found.reference || "—"}</div>
+            <div><span className="font-medium">Aadhar:</span> {found.aadhar_number || "—"}</div>
+            <div><span className="font-medium">Reg. Date:</span> {found.registration_date || "—"}</div>
           </div>
         </div>
       )}
@@ -107,20 +146,29 @@ export default function PersonLookupForm({ kind, onSaved, hideOnFound = false })
             <div className="text-sm uppercase tracking-widest text-copper font-medium">New {noun} Registration</div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <Label>Name</Label>
+              <Label>Name <span className="text-red-500">*</span></Label>
               <Input required data-testid="new-name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
             </div>
             <div>
-              <Label>Father&apos;s Name</Label>
+              <Label>Father&apos;s Name <span className="text-red-500">*</span></Label>
               <Input required data-testid="new-father" value={form.father_name} onChange={e => setForm({ ...form, father_name: e.target.value })} />
             </div>
             <div className="md:col-span-2">
-              <Label>Address</Label>
+              <Label>Address <span className="text-red-500">*</span></Label>
               <Input required data-testid="new-address" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
             </div>
             <div>
               <Label>Area</Label>
               <Input data-testid="new-area" value={form.area} onChange={e => setForm({ ...form, area: e.target.value })} />
+            </div>
+            <div>
+              <Label>Reference</Label>
+              <Input data-testid="new-reference" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} />
+            </div>
+            <div>
+              <Label>Aadhar Card <span className="text-red-500">*</span> (12 digits)</Label>
+              <Input required data-testid="new-aadhar" value={form.aadhar_number} onChange={e => { setForm({ ...form, aadhar_number: e.target.value }); setAadharError(validateAadhar(e.target.value)); }} placeholder="e.g. 123456789012" maxLength="12" className={aadharError ? "border-red-500" : ""} />
+              {aadharError && <div className="text-xs text-red-500 mt-1">{aadharError}</div>}
             </div>
           </div>
           <Button disabled={saving} className="btn-accent-copper rounded-full" data-testid="new-save-btn">

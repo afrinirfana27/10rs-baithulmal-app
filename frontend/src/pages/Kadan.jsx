@@ -11,18 +11,20 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import StatusBadge from "@/components/StatusBadge";
 import { toast } from "sonner";
-import { Plus } from "@phosphor-icons/react";
-import { useAuth } from "@/context/AuthContext";
+import { Plus, MagnifyingGlass } from "@phosphor-icons/react";
+import { isStaff, useAuth } from "@/context/AuthContext";
 
 const CATEGORIES = ["Medical", "Education", "Economic"];
 
 export default function Kadan({ variant }) {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isStaff(user);
   const isVatti = variant === "vattiyilla";
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState([]);
+  const [filteredRows, setFilteredRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   const [beneficiary, setBeneficiary] = useState(null);
   const [category, setCategory] = useState("Medical");
   const [amount, setAmount] = useState("");
@@ -37,9 +39,25 @@ export default function Kadan({ variant }) {
   const load = () => {
     setLoading(true);
     api.get("/loans", { params: { kadan_type: isVatti ? "vattiyilla" : "kadan" } })
-      .then(r => setRows(r.data)).finally(() => setLoading(false));
+      .then(r => { setRows(r.data); setFilteredRows(r.data); }).finally(() => setLoading(false));
   };
   useEffect(load, [isVatti]);
+
+  const handleSearch = (query) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setFilteredRows(rows);
+      return;
+    }
+    const lowerQuery = query.toLowerCase();
+    const filtered = rows.filter(l =>
+      l.beneficiary?.name?.toLowerCase().includes(lowerQuery) ||
+      l.beneficiary?.contact?.includes(query) ||
+      l.category?.toLowerCase().includes(lowerQuery) ||
+      l.status?.toLowerCase().includes(lowerQuery)
+    );
+    setFilteredRows(filtered);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -171,6 +189,20 @@ export default function Kadan({ variant }) {
           </Dialog>
         }
       />
+      
+      <div className="card-earth mb-4 p-4">
+        <div className="flex gap-2 items-center">
+          <MagnifyingGlass size={18} className="text-[color:var(--text-muted)]" />
+          <Input
+            placeholder="Search by beneficiary name, contact, category, status..."
+            value={searchQuery}
+            onChange={e => handleSearch(e.target.value)}
+            data-testid="search-loans"
+            className="flex-1"
+          />
+          {searchQuery && <span className="text-xs text-[color:var(--text-muted)]">Found: {filteredRows.length}</span>}
+        </div>
+      </div>
 
       <div className="card-earth overflow-x-auto">
         <Table>

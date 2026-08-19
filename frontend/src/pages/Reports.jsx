@@ -43,8 +43,8 @@ export default function Reports() {
         subtitle: `${data.donor?.name || ""} · ${data.donor?.contact || ""}`,
         sections: [{
           heading: "Payments",
-          columns: ["Receipt", "From", "To", "Months", "Amount"],
-          rows: data.payments.map(p => [p.receipt_no, p.month_from, p.month_to, p.months.length, inr(p.total_amount)]),
+          columns: ["Receipt", "Collection Date", "Amount"],
+          rows: data.payments.map(p => [p.receipt_no, p.collection_date || "—", inr(p.total_amount)]),
           total: data.total,
         }],
       });
@@ -162,13 +162,13 @@ export default function Reports() {
                 <div><div className="text-xs uppercase text-[color:var(--text-muted)] tracking-widest">Total</div><div className="font-serif text-2xl text-copper mt-1">{inr(data.total)}</div></div>
               </div>
               <Table className="mt-6">
-                <TableHeader><TableRow className="bg-sidebar"><TableHead>Receipt</TableHead><TableHead>From</TableHead><TableHead>To</TableHead><TableHead>Months</TableHead><TableHead>Amount</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow className="bg-sidebar"><TableHead>Receipt</TableHead><TableHead>Collection Date</TableHead><TableHead>Amount</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {data.payments.map(p => (
                     <TableRow key={p.id}>
                       <TableCell className="font-mono text-xs text-copper">{p.receipt_no}</TableCell>
-                      <TableCell>{p.month_from}</TableCell><TableCell>{p.month_to}</TableCell>
-                      <TableCell>{p.months.length}</TableCell><TableCell className="font-semibold">{inr(p.total_amount)}</TableCell>
+                      <TableCell>{p.collection_date || "—"}</TableCell>
+                      <TableCell className="font-semibold">{inr(p.total_amount)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

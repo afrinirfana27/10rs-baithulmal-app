@@ -5,11 +5,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
 import { toast } from "sonner";
-import { useAuth } from "@/context/AuthContext";
+import { canApprovePayments, useAuth } from "@/context/AuthContext";
 
 export default function Accounts() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  const canApprove = canApprovePayments(user);
   const [summary, setSummary] = useState(null);
   const [outstanding, setOutstanding] = useState([]);
   const [pending, setPending] = useState([]);
@@ -20,12 +20,12 @@ export default function Accounts() {
     try {
       const [s, o, p] = await Promise.all([
         api.get("/accounts/summary"),
-        isAdmin ? api.get("/accounts/user-outstanding") : Promise.resolve({ data: [] }),
-        isAdmin ? api.get("/payments/pending") : Promise.resolve({ data: [] }),
+        api.get("/accounts/user-outstanding"),
+        canApprove ? api.get("/payments/pending") : Promise.resolve({ data: [] }),
       ]);
       setSummary(s.data); setOutstanding(o.data); setPending(p.data);
     } finally { setLoading(false); }
-  }, [isAdmin]);
+  }, [canApprove]);
   useEffect(() => { load(); }, [load]);
 
   const act = async (id, ok) => {
@@ -55,27 +55,27 @@ export default function Accounts() {
         </div>
       </div>
 
-      {isAdmin && (
-        <>
-          <h2 className="font-serif text-2xl font-semibold mt-10 mb-4">Outstanding by Collector</h2>
-          <div className="card-earth overflow-x-auto">
-            <Table>
-              <TableHeader><TableRow className="bg-sidebar">
-                <TableHead>Collector</TableHead><TableHead>Pending Receipts</TableHead><TableHead>Outstanding</TableHead>
-              </TableRow></TableHeader>
-              <TableBody>
-                {outstanding.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center py-8 text-[color:var(--text-muted)]">No outstanding payments.</TableCell></TableRow>
-                  : outstanding.map(o => (
-                    <TableRow key={o.user_id} data-testid={`outstanding-${o.user_id}`}>
-                      <TableCell className="font-medium">{o.name}</TableCell>
-                      <TableCell>{o.count}</TableCell>
-                      <TableCell className="font-semibold text-copper">{inr(o.outstanding)}</TableCell>
-                    </TableRow>
-                  ))}
-              </TableBody>
-            </Table>
-          </div>
+      <h2 className="font-serif text-2xl font-semibold mt-10 mb-4">Outstanding by Collector</h2>
+      <div className="card-earth overflow-x-auto">
+        <Table>
+          <TableHeader><TableRow className="bg-sidebar">
+            <TableHead>Collector</TableHead><TableHead>Pending Receipts</TableHead><TableHead>Outstanding</TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {outstanding.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center py-8 text-[color:var(--text-muted)]">No outstanding payments.</TableCell></TableRow>
+              : outstanding.map(o => (
+                <TableRow key={o.user_id} data-testid={`outstanding-${o.user_id}`}>
+                  <TableCell className="font-medium">{o.name}</TableCell>
+                  <TableCell>{o.count}</TableCell>
+                  <TableCell className="font-semibold text-copper">{inr(o.outstanding)}</TableCell>
+                </TableRow>
+              ))}
+          </TableBody>
+        </Table>
+      </div>
 
+      {canApprove && (
+        <>
           <h2 className="font-serif text-2xl font-semibold mt-10 mb-4">Pending Approvals</h2>
           <div className="card-earth overflow-x-auto">
             <Table>

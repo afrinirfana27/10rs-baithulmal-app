@@ -11,13 +11,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus } from "@phosphor-icons/react";
+import { Plus, MagnifyingGlass } from "@phosphor-icons/react";
 
 export default function Expenses() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("salary");
   const [rows, setRows] = useState([]);
+  const [filteredRows, setFilteredRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // salary form
   const [worker, setWorker] = useState(null);
@@ -32,9 +34,25 @@ export default function Expenses() {
 
   const load = () => {
     setLoading(true);
-    api.get("/expenses").then(r => setRows(r.data)).finally(() => setLoading(false));
+    api.get("/expenses").then(r => { setRows(r.data); setFilteredRows(r.data); }).finally(() => setLoading(false));
   };
   useEffect(load, []);
+
+  const handleSearch = (query) => {
+    setSearchQuery(query);
+    if (!query.trim()) {
+      setFilteredRows(rows);
+      return;
+    }
+    const lowerQuery = query.toLowerCase();
+    const filtered = rows.filter(e =>
+      e.kind?.toLowerCase().includes(lowerQuery) ||
+      e.worker?.name?.toLowerCase().includes(lowerQuery) ||
+      e.category?.toLowerCase().includes(lowerQuery) ||
+      e.note?.toLowerCase().includes(lowerQuery)
+    );
+    setFilteredRows(filtered);
+  };
 
   const submitSalary = async (e) => {
     e.preventDefault();
@@ -117,7 +135,19 @@ export default function Expenses() {
           </Dialog>
         }
       />
-
+      <div className="card-earth mb-4 p-4">
+        <div className="flex gap-2 items-center">
+          <MagnifyingGlass size={18} className="text-[color:var(--text-muted)]" />
+          <Input
+            placeholder="Search by worker, category, note..."
+            value={searchQuery}
+            onChange={e => handleSearch(e.target.value)}
+            data-testid="search-expenses"
+            className="flex-1"
+          />
+          {searchQuery && <span className="text-xs text-[color:var(--text-muted)]">Found: {filteredRows.length}</span>}
+        </div>
+      </div>
       <div className="card-earth overflow-x-auto">
         <Table>
           <TableHeader>
@@ -131,8 +161,8 @@ export default function Expenses() {
           </TableHeader>
           <TableBody>
             {loading ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-[color:var(--text-muted)]">Loading…</TableCell></TableRow>
-              : rows.length === 0 ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-[color:var(--text-muted)]">No expenses yet.</TableCell></TableRow>
-              : rows.map(e => (
+              : filteredRows.length === 0 ? <TableRow><TableCell colSpan={5} className="py-10 text-center text-[color:var(--text-muted)]">{searchQuery ? "No matching expenses." : "No expenses yet."}</TableCell></TableRow>
+              : filteredRows.map(e => (
                 <TableRow key={e.id} data-testid={`expense-row-${e.id}`}>
                   <TableCell className="capitalize">{e.kind}</TableCell>
                   <TableCell>{e.kind === "salary" ? `${e.worker?.name || "—"} · ${e.month || ""}` : e.category}</TableCell>
