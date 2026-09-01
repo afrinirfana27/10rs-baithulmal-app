@@ -66,7 +66,7 @@ export default function Payments() {
     } finally {
       setLoading(false);
     }
-  }, [filterFrom, filterTo, rows.length, searchQuery]);
+  }, [applySearch, filterFrom, filterTo, rows.length, searchQuery]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(true); }, [filterFrom, filterTo]);
 
