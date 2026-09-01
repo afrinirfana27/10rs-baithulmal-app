@@ -10,8 +10,8 @@ import { formatDetail } from "@/lib/api";
 export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState("admin@baithulmal.com");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
   if (user) return <Navigate to={isCollector(user) ? "/payments" : "/"} replace />;
@@ -73,7 +73,7 @@ export default function Login() {
           <form onSubmit={submit} className="mt-8 space-y-5" data-testid="login-form">
             <div>
               <Label>Email</Label>
-              <Input required type="email" data-testid="login-email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@baithulmal.com" />
+              <Input required type="email" data-testid="login-email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
             </div>
             <div>
               <Label>Password</Label>
@@ -82,9 +82,6 @@ export default function Login() {
             <Button disabled={busy} data-testid="login-submit" className="btn-primary-moss rounded-full w-full py-6 text-base font-medium">
               {busy ? "Signing in…" : "Sign in"}
             </Button>
-            <div className="text-xs text-[color:var(--text-muted)] text-center pt-2">
-              Default admin — admin@baithulmal.com / admin123
-            </div>
           </form>
         </div>
       </div>

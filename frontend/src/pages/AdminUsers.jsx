@@ -19,7 +19,7 @@ export default function AdminUsers() {
   const [filteredRows, setFilteredRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [form, setForm] = useState({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [] });
+  const [form, setForm] = useState({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [], is_active: true });
   const [editing, setEditing] = useState(null);
 
   const load = () => api.get("/admin/users").then(r => { setRows(r.data); setFilteredRows(r.data); });
@@ -44,7 +44,7 @@ export default function AdminUsers() {
     e.preventDefault();
     try {
       if (editing) {
-        const payload = { name: form.name, role: form.role, permissions: form.permissions };
+        const payload = { name: form.name, role: form.role, permissions: form.permissions, is_active: form.is_active };
         if (form.password) payload.password = form.password;
         await api.patch(`/admin/users/${editing.id}`, payload);
         toast.success("Updated");
@@ -53,7 +53,7 @@ export default function AdminUsers() {
         toast.success("User created");
       }
       setOpen(false); setEditing(null);
-      setForm({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [] });
+      setForm({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [], is_active: true });
       load();
     } catch (e) { toast.error(formatDetail(e.response?.data?.detail)); }
   };
@@ -66,8 +66,16 @@ export default function AdminUsers() {
 
   const editUser = (u) => {
     setEditing(u);
-    setForm({ email: u.email, password: "", name: u.name, role: u.role, permissions: u.permissions || [] });
+    setForm({ email: u.email, password: "", name: u.name, role: u.role, permissions: u.permissions || [], is_active: u.is_active !== false });
     setOpen(true);
+  };
+
+  const toggleActive = async (u) => {
+    try {
+      await api.patch(`/admin/users/${u.id}`, { is_active: u.is_active === false });
+      toast.success(u.is_active === false ? "User activated" : "User deactivated");
+      load();
+    } catch (e) { toast.error(formatDetail(e.response?.data?.detail)); }
   };
 
   const togglePerm = (p) => setForm(f => ({ ...f, permissions: f.permissions.includes(p) ? f.permissions.filter(x => x !== p) : [...f.permissions, p] }));
@@ -78,7 +86,7 @@ export default function AdminUsers() {
         title="Admin · Users"
         subtitle="Create Accountant Admin, Account Assistant, and Payment Collector logins."
         action={
-          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditing(null); setForm({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [] }); } }}>
+          <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditing(null); setForm({ email: "", password: "", name: "", role: ROLES.PAYMENT_COLLECTOR, permissions: [], is_active: true }); } }}>
             <DialogTrigger asChild>
               <Button className="btn-accent-copper rounded-full px-5 py-6" data-testid="add-user-btn">
                 <Plus size={16} weight="bold" className="mr-2" /> Add User
@@ -109,6 +117,12 @@ export default function AdminUsers() {
                       <SelectItem value={ROLES.PAYMENT_COLLECTOR}>Payment Collector</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} data-testid="user-active" />
+                    <span>Active (can log in)</span>
+                  </label>
                 </div>
                 <div>
                   <Label>Permissions</Label>
@@ -144,7 +158,7 @@ export default function AdminUsers() {
         <Table>
           <TableHeader>
             <TableRow className="bg-sidebar">
-              <TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Permissions</TableHead><TableHead className="text-right">Actions</TableHead>
+              <TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead><TableHead>Permissions</TableHead><TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -153,9 +167,15 @@ export default function AdminUsers() {
                 <TableCell className="font-medium">{u.name}</TableCell>
                 <TableCell>{u.email}</TableCell>
                 <TableCell>{roleLabel(u.role)}</TableCell>
+                <TableCell>{u.is_active === false ? "Disabled" : "Active"}</TableCell>
                 <TableCell className="text-xs text-[color:var(--text-muted)]">{(u.permissions || []).join(", ") || "—"}</TableCell>
                 <TableCell className="text-right space-x-1">
                   <Button size="sm" variant="ghost" onClick={() => editUser(u)} data-testid={`edit-${u.id}`}>Edit</Button>
+                  {u.id !== user.id && (
+                    <Button size="sm" variant="ghost" onClick={() => toggleActive(u)} data-testid={`toggle-active-${u.id}`}>
+                      {u.is_active === false ? "Activate" : "Deactivate"}
+                    </Button>
+                  )}
                   {u.id !== user.id && <Button size="sm" variant="ghost" onClick={() => remove(u.id)} data-testid={`del-${u.id}`}>Delete</Button>}
                 </TableCell>
               </TableRow>

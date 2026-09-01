@@ -19,6 +19,24 @@ ADMIN_PASSWORD = "admin123"
 
 TAG = uuid.uuid4().hex[:8]
 
+
+def _is_test_user(u):
+    email = (u.get("email") or "").lower()
+    name = u.get("name") or ""
+    return email.endswith("@test.com") or name.startswith("TEST_")
+
+
+def _free_role_slot(admin_client, role, limit=4):
+    users = admin_client.get(f"{API}/admin/users").json()
+    active = [u for u in users if u.get("role") == role and u.get("is_active", True)]
+    if len(active) < limit:
+        return
+    for u in active:
+        if _is_test_user(u):
+            admin_client.patch(f"{API}/admin/users/{u['id']}", json={"is_active": False})
+            return
+    raise AssertionError(f"No test {role} slot available (limit {limit})")
+
 # --- fixtures --------------------------------------------------------------
 
 
@@ -38,13 +56,17 @@ def admin_client(admin_token):
 
 @pytest.fixture(scope="session")
 def collector_creds(admin_client):
+    _free_role_slot(admin_client, "payment_collector")
     email = f"collector_{TAG}@test.com"
     password = "coll1234"
     r = admin_client.post(f"{API}/admin/users", json={
         "email": email, "password": password, "name": f"TEST_Collector_{TAG}", "role": "payment_collector"
     })
     assert r.status_code == 200, r.text
-    return {"email": email, "password": password, "id": r.json()["id"]}
+    creds = {"email": email, "password": password, "id": r.json()["id"]}
+    yield creds
+    admin_client.patch(f"{API}/admin/users/{creds['id']}", json={"is_active": False})
+    admin_client.delete(f"{API}/admin/users/{creds['id']}")
 
 
 @pytest.fixture(scope="session")
@@ -345,6 +367,7 @@ class TestReports:
 
 class TestAdminUsers:
     def test_crud(self, admin_client):
+        _free_role_slot(admin_client, "payment_collector")
         email = f"crud_{TAG}_{uuid.uuid4().hex[:4]}@test.com"
         c = admin_client.post(f"{API}/admin/users", json={
             "email": email, "password": "pass1234", "name": "TEST_CRUD", "role": "payment_collector"
@@ -385,3 +408,91 @@ class TestRBAC:
         # payments pending
         assert collector_client.get(f"{API}/payments/pending").status_code == 403
         # user-outstanding covered in accounts tests
+        assert collector_client.get(f"{API}/sadakah").status_code == 403
+        assert collector_client.get(f"{API}/expenses").status_code == 403
+        assert collector_client.get(f"{API}/people/beneficiaries").status_code == 403
+        assert collector_client.post(f"{API}/people/donors", json={
+            "name": "X", "father_name": "F", "address": "A", "contact": f"9{TAG}00000"[:10]
+        }).status_code == 403
+        # cannot approve
+        assert collector_client.post(f"{API}/payments/{uuid.uuid4()}/approve", json={"approve": True}).status_code in (403, 404)
+
+    def test_collector_sees_only_own_payments(self, admin_client, collector_client, collector_creds, created_people):
+        admin_pay = admin_client.post(f"{API}/payments", json={
+            "donor_id": created_people["donors"]["id"],
+            "collection_date": "2026-03-01", "amount_per_month": 10.0
+        })
+        assert admin_pay.status_code == 200
+        own = collector_client.post(f"{API}/payments", json={
+            "donor_id": created_people["donors"]["id"],
+            "collection_date": "2026-03-02", "amount_per_month": 10.0
+        })
+        assert own.status_code == 200
+        own_id = own.json()["id"]
+        listed = collector_client.get(f"{API}/payments")
+        assert listed.status_code == 200
+        ids = [p["id"] for p in listed.json()]
+        assert own_id in ids
+        assert admin_pay.json()["id"] not in ids
+        assert all(p.get("collected_by") == collector_creds["id"] for p in listed.json())
+        # frontend-supplied collector_id must be ignored
+        spoof = collector_client.get(f"{API}/payments", params={"collected_by": "someone-else", "user_id": "someone-else"})
+        assert spoof.status_code == 200
+        assert all(p.get("collected_by") == collector_creds["id"] for p in spoof.json())
+
+    def test_assistant_cannot_approve_or_manage_users(self, admin_client, created_people):
+        _free_role_slot(admin_client, "account_assistant")
+        email = f"asst_{TAG}@test.com"
+        password = "asst1234"
+        created = admin_client.post(f"{API}/admin/users", json={
+            "email": email, "password": password, "name": f"TEST_Asst_{TAG}", "role": "account_assistant"
+        })
+        assert created.status_code == 200, created.text
+        uid = created.json()["id"]
+        try:
+            login = requests.post(f"{API}/auth/login", json={"email": email, "password": password})
+            assert login.status_code == 200
+            assert login.json()["user"]["role"] == "account_assistant"
+            s = requests.Session()
+            s.headers.update({"Authorization": f"Bearer {login.json()['token']}", "Content-Type": "application/json"})
+            pay = s.post(f"{API}/payments", json={
+                "donor_id": created_people["donors"]["id"],
+                "collection_date": "2026-04-01", "amount_per_month": 10.0
+            })
+            assert pay.status_code == 200
+            assert pay.json()["status"] == "pending"
+            assert s.post(f"{API}/payments/{pay.json()['id']}/approve", json={"approve": True}).status_code == 403
+            assert s.get(f"{API}/admin/users").status_code == 403
+            assert s.post(f"{API}/admin/users", json={
+                "email": f"x_{TAG}@test.com", "password": "x1234567", "name": "X", "role": "payment_collector"
+            }).status_code == 403
+            ledger = s.get(f"{API}/payments")
+            assert ledger.status_code == 200
+            assert pay.json()["id"] in [p["id"] for p in ledger.json()]
+        finally:
+            admin_client.patch(f"{API}/admin/users/{uid}", json={"is_active": False})
+            admin_client.delete(f"{API}/admin/users/{uid}")
+
+    def test_inactive_user_cannot_login(self, admin_client):
+        email = f"inactive_{TAG}@test.com"
+        password = "inact1234"
+        created = admin_client.post(f"{API}/admin/users", json={
+            "email": email, "password": password, "name": "Inactive", "role": "payment_collector", "is_active": False
+        })
+        assert created.status_code == 200, created.text
+        uid = created.json()["id"]
+        try:
+            off = admin_client.patch(f"{API}/admin/users/{uid}", json={"is_active": False})
+            assert off.status_code == 200
+            assert off.json()["is_active"] is False
+            r = requests.post(f"{API}/auth/login", json={"email": email, "password": password})
+            assert r.status_code == 401
+        finally:
+            admin_client.delete(f"{API}/admin/users/{uid}")
+
+    def test_second_accountant_admin_rejected(self, admin_client):
+        email = f"admin2_{TAG}@test.com"
+        r = admin_client.post(f"{API}/admin/users", json={
+            "email": email, "password": "admin2345", "name": "Second Admin", "role": "accountant_admin"
+        })
+        assert r.status_code == 400

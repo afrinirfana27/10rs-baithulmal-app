@@ -7,6 +7,7 @@ load_dotenv(ROOT_DIR / '.env')
 import os
 import uuid
 import logging
+import asyncio
 import bcrypt
 import jwt
 from datetime import datetime, timezone, timedelta
@@ -14,7 +15,7 @@ from typing import List, Optional, Literal
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 # Mongo
 mongo_url = os.environ['MONGO_URL']
@@ -54,6 +55,94 @@ def create_token(user_id: str, email: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 
+# Roles: accountant_admin (full + approval), account_assistant (full, no approval),
+# payment_collector (collection entry only). Legacy aliases are mapped to these values.
+ROLE_ACCOUNTANT_ADMIN = "accountant_admin"
+ROLE_ACCOUNT_ASSISTANT = "account_assistant"
+ROLE_PAYMENT_COLLECTOR = "payment_collector"
+
+LEGACY_ROLE_MAP = {
+    ROLE_ACCOUNTANT_ADMIN: ROLE_ACCOUNTANT_ADMIN,
+    "admin": ROLE_ACCOUNTANT_ADMIN,
+    "co-admin": ROLE_ACCOUNTANT_ADMIN,
+    ROLE_ACCOUNT_ASSISTANT: ROLE_ACCOUNT_ASSISTANT,
+    "assistant_admin": ROLE_ACCOUNT_ASSISTANT,
+    "accountant": ROLE_ACCOUNT_ASSISTANT,
+    ROLE_PAYMENT_COLLECTOR: ROLE_PAYMENT_COLLECTOR,
+    "collector": ROLE_PAYMENT_COLLECTOR,
+    "user": ROLE_PAYMENT_COLLECTOR,
+}
+
+ROLE_ALIASES = {
+    ROLE_ACCOUNTANT_ADMIN: [ROLE_ACCOUNTANT_ADMIN, "admin", "co-admin"],
+    ROLE_ACCOUNT_ASSISTANT: [ROLE_ACCOUNT_ASSISTANT, "assistant_admin", "accountant"],
+    ROLE_PAYMENT_COLLECTOR: [ROLE_PAYMENT_COLLECTOR, "collector", "user"],
+}
+
+ROLE_ACTIVE_LIMITS = {
+    ROLE_ACCOUNTANT_ADMIN: 1,
+    ROLE_ACCOUNT_ASSISTANT: 4,
+    ROLE_PAYMENT_COLLECTOR: 4,
+}
+
+USER_ROLE_VALUES = Literal["accountant_admin", "account_assistant", "payment_collector"]
+
+
+def canonical_role(role: Optional[str]) -> str:
+    if not role:
+        return ROLE_PAYMENT_COLLECTOR
+    return LEGACY_ROLE_MAP.get(str(role).strip().lower(), ROLE_PAYMENT_COLLECTOR)
+
+
+def _role(user: dict) -> str:
+    return canonical_role((user or {}).get("role"))
+
+
+def is_accountant_admin(user: dict) -> bool:
+    return _role(user) == ROLE_ACCOUNTANT_ADMIN
+
+
+def is_staff(user: dict) -> bool:
+    return _role(user) in {ROLE_ACCOUNTANT_ADMIN, ROLE_ACCOUNT_ASSISTANT}
+
+
+def is_collector(user: dict) -> bool:
+    return _role(user) == ROLE_PAYMENT_COLLECTOR
+
+
+def public_user(user: dict) -> dict:
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "name": user.get("name", ""),
+        "role": canonical_role(user.get("role")),
+        "permissions": user.get("permissions", []),
+        "is_active": user.get("is_active", True),
+    }
+
+
+async def count_active_role(role: str, exclude_id: Optional[str] = None) -> int:
+    canonical = canonical_role(role)
+    query = {
+        "role": {"$in": ROLE_ALIASES[canonical]},
+        "is_active": {"$ne": False},
+    }
+    if exclude_id:
+        query["id"] = {"$ne": exclude_id}
+    return await db.users.count_documents(query)
+
+
+async def assert_role_slot_available(role: str, exclude_id: Optional[str] = None):
+    canonical = canonical_role(role)
+    limit = ROLE_ACTIVE_LIMITS[canonical]
+    current = await count_active_role(canonical, exclude_id=exclude_id)
+    if current >= limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum of {limit} active {canonical} account(s) allowed",
+        )
+
+
 async def get_current_user(request: Request) -> dict:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -68,35 +157,10 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account is disabled")
+    user["role"] = canonical_role(user.get("role"))
     return user
-
-
-# Roles: accountant_admin (full + approval), account_assistant (full, no approval),
-# payment_collector (collection entry only). Legacy aliases are still recognized.
-ROLE_ACCOUNTANT_ADMIN = "accountant_admin"
-ROLE_ACCOUNT_ASSISTANT = "account_assistant"
-ROLE_PAYMENT_COLLECTOR = "payment_collector"
-
-ACCOUNTANT_ADMIN_ROLES = {ROLE_ACCOUNTANT_ADMIN, "admin", "co-admin"}
-STAFF_ROLES = ACCOUNTANT_ADMIN_ROLES | {ROLE_ACCOUNT_ASSISTANT, "accountant"}
-COLLECTOR_ROLES = {ROLE_PAYMENT_COLLECTOR, "collector"}
-USER_ROLE_VALUES = Literal["accountant_admin", "account_assistant", "payment_collector"]
-
-
-def _role(user: dict) -> str:
-    return (user or {}).get("role") or ROLE_PAYMENT_COLLECTOR
-
-
-def is_accountant_admin(user: dict) -> bool:
-    return _role(user) in ACCOUNTANT_ADMIN_ROLES
-
-
-def is_staff(user: dict) -> bool:
-    return _role(user) in STAFF_ROLES
-
-
-def is_collector(user: dict) -> bool:
-    return _role(user) in COLLECTOR_ROLES
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -159,6 +223,7 @@ class UserCreate(BaseModel):
     name: str
     role: USER_ROLE_VALUES = ROLE_PAYMENT_COLLECTOR
     permissions: List[str] = Field(default_factory=list)
+    is_active: bool = True
 
 
 class UserUpdate(BaseModel):
@@ -166,6 +231,7 @@ class UserUpdate(BaseModel):
     role: Optional[USER_ROLE_VALUES] = None
     permissions: Optional[List[str]] = None
     password: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class PersonBase(BaseModel):
@@ -232,9 +298,24 @@ class SadakahIn(BaseModel):
 
 class PaymentIn(BaseModel):
     donor_id: str
-    collection_date: str  # YYYY-MM-DD
-    amount_per_month: float = 10.0
+    date_from: Optional[str] = None  # YYYY-MM-DD
+    date_to: Optional[str] = None
+    collection_date: Optional[str] = None  # legacy single-day alias
+    amount_per_month: Optional[float] = None
+    amount: Optional[float] = None
     note: Optional[str] = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, data):
+        if isinstance(data, dict):
+            if data.get("date_from") is None and data.get("collection_date"):
+                data["date_from"] = data["collection_date"]
+            if data.get("date_to") is None and data.get("collection_date"):
+                data["date_to"] = data["collection_date"]
+            if data.get("amount_per_month") is None and data.get("amount") is not None:
+                data["amount_per_month"] = data["amount"]
+        return data
 
 
 class ExpenseIn(BaseModel):
@@ -258,29 +339,29 @@ async def login(data: LoginIn):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_token(user["id"], user["email"], user.get("role", ROLE_PAYMENT_COLLECTOR))
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account is disabled")
+    role = canonical_role(user.get("role"))
+    if user.get("role") != role:
+        await db.users.update_one({"id": user["id"]}, {"$set": {"role": role}})
+        user["role"] = role
+    token = create_token(user["id"], user["email"], role)
     return {
         "token": token,
-        "user": {
-            "id": user["id"],
-            "email": user["email"],
-            "name": user["name"],
-            "role": user.get("role", ROLE_PAYMENT_COLLECTOR),
-            "permissions": user.get("permissions", []),
-        },
+        "user": public_user(user),
     }
 
 
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
-    return user
+    return public_user(user)
 
 
 # ---------------- Admin: Users ----------------
 @api.get("/admin/users")
 async def list_users(admin: dict = Depends(require_admin)):
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
-    return users
+    return [public_user(u) for u in users]
 
 
 @api.post("/admin/users")
@@ -288,42 +369,76 @@ async def create_user(data: UserCreate, admin: dict = Depends(require_admin)):
     email = data.email.strip().lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already exists")
+    role = canonical_role(data.role)
+    is_active = bool(data.is_active)
+    if is_active:
+        await assert_role_slot_available(role)
     doc = {
         "id": new_id(),
         "email": email,
         "name": data.name,
-        "role": data.role,
+        "role": role,
         "permissions": data.permissions,
+        "is_active": is_active,
         "password_hash": hash_password(data.password),
         "created_at": now_iso(),
     }
     await db.users.insert_one(doc)
     doc.pop("password_hash", None)
     doc.pop("_id", None)
-    return doc
+    return public_user(doc)
 
 
 @api.patch("/admin/users/{user_id}")
 async def update_user(user_id: str, data: UserUpdate, admin: dict = Depends(require_admin)):
+    existing = await db.users.find_one({"id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
     updates = {}
-    for k in ("name", "role", "permissions"):
-        v = getattr(data, k)
-        if v is not None:
-            updates[k] = v
+    if data.name is not None:
+        updates["name"] = data.name
+    if data.permissions is not None:
+        updates["permissions"] = data.permissions
     if data.password:
         updates["password_hash"] = hash_password(data.password)
+
+    existing_role = canonical_role(existing.get("role"))
+    existing_active = existing.get("is_active", True)
+    next_role = canonical_role(data.role) if data.role is not None else existing_role
+    next_active = bool(data.is_active) if data.is_active is not None else existing_active
+
+    if data.role is not None:
+        updates["role"] = next_role
+    if data.is_active is not None:
+        updates["is_active"] = next_active
+
+    leaving_admin = existing_active and existing_role == ROLE_ACCOUNTANT_ADMIN and (
+        next_role != ROLE_ACCOUNTANT_ADMIN or not next_active
+    )
+    if leaving_admin:
+        remaining = await count_active_role(ROLE_ACCOUNTANT_ADMIN, exclude_id=user_id)
+        if remaining < 1:
+            raise HTTPException(status_code=400, detail="Cannot remove the last Accountant Admin")
+
+    currently_occupies = existing_active and existing_role == next_role
+    if next_active and not currently_occupies:
+        await assert_role_slot_available(next_role)
+
     if updates:
         await db.users.update_one({"id": user_id}, {"$set": updates})
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return public_user(user)
 
 
 @api.delete("/admin/users/{user_id}")
 async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
     if user_id == admin["id"]:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    existing = await db.users.find_one({"id": user_id})
+    if existing and existing.get("is_active", True) and canonical_role(existing.get("role")) == ROLE_ACCOUNTANT_ADMIN:
+        remaining = await count_active_role(ROLE_ACCOUNTANT_ADMIN, exclude_id=user_id)
+        if remaining < 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last Accountant Admin")
     await db.users.delete_one({"id": user_id})
     return {"ok": True}
 
@@ -626,21 +741,58 @@ def _parse_ymd(value: str, field: str = "collection_date") -> str:
     return value
 
 
+def _months_inclusive(date_from: str, date_to: str) -> int:
+    a = datetime.strptime(date_from, "%Y-%m-%d")
+    b = datetime.strptime(date_to, "%Y-%m-%d")
+    months = (b.year - a.year) * 12 + (b.month - a.month) + 1
+    if months < 1:
+        raise HTTPException(status_code=400, detail="date_to must be on or after date_from")
+    return months
+
+
+def _resolve_payment_dates(data: PaymentIn) -> tuple:
+    start = (data.date_from or data.collection_date or "").strip()
+    end = (data.date_to or data.date_from or data.collection_date or "").strip()
+    if not start or not end:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    start = _parse_ymd(start, "date_from")
+    end = _parse_ymd(end, "date_to")
+    if end < start:
+        raise HTTPException(status_code=400, detail="date_to must be on or after date_from")
+    return start, end
+
+
+def _payment_overlap_query(start: str, end_inclusive: str) -> dict:
+    """Match payments whose period overlaps the inclusive [start, end] window."""
+    return {
+        "$or": [
+            {"date_from": {"$lte": end_inclusive}, "date_to": {"$gte": start}},
+            {
+                "date_from": {"$exists": False},
+                "collection_date": {"$gte": start, "$lte": end_inclusive},
+            },
+        ]
+    }
+
+
 @api.get("/payments")
 async def list_payments(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    limit: int = 400,
     user: dict = Depends(get_current_user),
 ):
     query = {}
-    date_filter = {}
-    if date_from:
-        date_filter["$gte"] = _parse_ymd(date_from, "date_from")
-    if date_to:
-        date_filter["$lte"] = _parse_ymd(date_to, "date_to")
-    if date_filter:
-        query["collection_date"] = date_filter
-    return await db.payments.find(query, {"_id": 0}).sort("collection_date", -1).to_list(5000)
+    if date_from or date_to:
+        start = _parse_ymd(date_from, "date_from") if date_from else "0000-01-01"
+        end = _parse_ymd(date_to, "date_to") if date_to else "9999-12-31"
+        query.update(_payment_overlap_query(start, end))
+    if is_collector(user):
+        query["collected_by"] = user["id"]
+    elif not is_staff(user):
+        raise HTTPException(status_code=403, detail="Staff access required")
+    cap = max(1, min(int(limit or 400), 2000))
+    return await db.payments.find(query, {"_id": 0}).sort("created_at", -1).to_list(cap)
 
 
 @api.get("/payments/pending")
@@ -653,23 +805,27 @@ async def create_payment(data: PaymentIn, user: dict = Depends(get_current_user)
     donor = await db.donors.find_one({"id": data.donor_id}, {"_id": 0})
     if not donor:
         raise HTTPException(status_code=404, detail="Donor not found")
-    collection_date = _parse_ymd(data.collection_date)
-    amount = float(data.amount_per_month)
-    auto_approve = user.get("role") == ROLE_ACCOUNTANT_ADMIN
+    date_from, date_to = _resolve_payment_dates(data)
+    months = _months_inclusive(date_from, date_to)
+    amount = float(data.amount_per_month or data.amount or 10.0)
+    total = round(amount * months, 2)
     doc = {
         "id": new_id(),
         "receipt_no": build_receipt_number(),
         "donor": donor,
-        "collection_date": collection_date,
+        "date_from": date_from,
+        "date_to": date_to,
+        "collection_date": date_from,
+        "months": months,
         "amount_per_month": amount,
-        "total_amount": amount,
+        "total_amount": total,
         "note": data.note or "",
-        "status": "approved" if auto_approve else "pending",
+        "status": "pending",
         "collected_by": user["id"],
         "collected_by_name": user.get("name", ""),
         "created_at": now_iso(),
-        "approved_at": now_iso() if auto_approve else None,
-        "approved_by": user["id"] if auto_approve else None,
+        "approved_at": None,
+        "approved_by": None,
     }
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
@@ -917,31 +1073,49 @@ async def on_start():
     except Exception as ex:
         logger.warning(f"Index setup: {ex}")
 
+    await db.users.update_many({"is_active": {"$exists": False}}, {"$set": {"is_active": True}})
+    await db.users.update_many(
+        {"role": {"$in": ["admin", "co-admin"]}},
+        {"$set": {"role": ROLE_ACCOUNTANT_ADMIN}},
+    )
+    await db.users.update_many(
+        {"role": {"$in": ["accountant", "assistant_admin"]}},
+        {"$set": {"role": ROLE_ACCOUNT_ASSISTANT}},
+    )
+    await db.users.update_many(
+        {"role": {"$in": ["collector", "user"]}},
+        {"$set": {"role": ROLE_PAYMENT_COLLECTOR}},
+    )
+
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@baithulmal.com").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     existing = await db.users.find_one({"email": admin_email})
+    active_admins = await count_active_role(ROLE_ACCOUNTANT_ADMIN)
     if not existing:
-        await db.users.insert_one({
-            "id": new_id(),
-            "email": admin_email,
-            "password_hash": hash_password(admin_password),
-            "name": "Administrator",
-            "role": ROLE_ACCOUNTANT_ADMIN,
-            "permissions": ["*"],
-            "created_at": now_iso(),
-        })
-        logger.info(f"Seeded admin: {admin_email}")
+        if active_admins < ROLE_ACTIVE_LIMITS[ROLE_ACCOUNTANT_ADMIN]:
+            await db.users.insert_one({
+                "id": new_id(),
+                "email": admin_email,
+                "password_hash": hash_password(admin_password),
+                "name": "Administrator",
+                "role": ROLE_ACCOUNTANT_ADMIN,
+                "permissions": ["*"],
+                "is_active": True,
+                "created_at": now_iso(),
+            })
+            logger.info(f"Seeded admin: {admin_email}")
     else:
         updates = {}
-        if existing.get("role") in {"admin", "co-admin", "accountant", None, ""}:
+        if "is_active" not in existing:
+            updates["is_active"] = True
+        if active_admins < 1:
             updates["role"] = ROLE_ACCOUNTANT_ADMIN
-        if not verify_password(admin_password, existing.get("password_hash", "")):
+            updates["is_active"] = True
+        if admin_password and not verify_password(admin_password, existing.get("password_hash", "")):
             updates["password_hash"] = hash_password(admin_password)
         if updates:
             await db.users.update_one({"email": admin_email}, {"$set": updates})
             logger.info("Updated seeded Accountant Admin from env")
-    await db.users.update_many({"role": "collector"}, {"$set": {"role": ROLE_PAYMENT_COLLECTOR}})
-    await db.users.update_many({"role": "accountant"}, {"$set": {"role": ROLE_ACCOUNT_ASSISTANT}})
 
 
 @app.on_event("shutdown")

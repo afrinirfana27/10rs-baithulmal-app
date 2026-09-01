@@ -69,7 +69,7 @@ function SidebarContent({ user, logout, onNavigate }) {
                     data-testid={n.testid}
                   >
                     <Icon size={18} weight="duotone" />
-                    <span>{n.label}</span>
+                    <span>{n.to === "/payments" && isCollector(user) ? "My Collections" : n.label}</span>
                   </NavLink>
                 );
               })}
@@ -101,7 +101,7 @@ function BottomNav({ location, user }) {
       <div className="bottom-nav lg:hidden" data-testid="mobile-bottom-nav">
         <NavLink to="/payments" className={path.startsWith("/payments") ? "active" : ""} data-testid="bn-payments">
           <Coins size={22} weight={path.startsWith("/payments") ? "fill" : "regular"} className="bn-icon" />
-          <span>Payments</span>
+          <span>Collections</span>
         </NavLink>
       </div>
     );

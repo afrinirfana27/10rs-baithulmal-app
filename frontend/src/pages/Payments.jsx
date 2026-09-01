@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, inr, formatDetail } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import PersonLookupForm from "@/components/PersonLookupForm";
@@ -25,51 +25,79 @@ export default function Payments() {
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
   const [donor, setDonor] = useState(null);
-  const [collectionDate, setCollectionDate] = useState(new Date().toISOString().slice(0, 10));
+  const today = new Date().toISOString().slice(0, 10);
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
   const [amount, setAmount] = useState(10);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const load = () => {
-    setLoading(true);
-    const params = {};
-    if (filterFrom) params.date_from = filterFrom;
-    if (filterTo) params.date_to = filterTo;
-    api.get("/payments", { params }).then(r => { setRows(r.data); setFilteredRows(r.data); }).finally(() => setLoading(false));
-  };
-  useEffect(load, [filterFrom, filterTo]);
+  const formatDateRange = useCallback((p) => {
+    const from = p.date_from || p.collection_date || "";
+    const to = p.date_to || from;
+    if (!from && !to) return "—";
+    return from === to ? from : `${from} → ${to}`;
+  }, []);
 
-  const handleSearch = (query) => {
-    setSearchQuery(query);
-    if (!query.trim()) {
-      setFilteredRows(rows);
-      return;
-    }
+  const applySearch = useCallback((records, query) => {
+    if (!query.trim()) return records;
     const lowerQuery = query.toLowerCase();
-    const filtered = rows.filter(p =>
+    return records.filter(p =>
       p.receipt_no?.toLowerCase().includes(lowerQuery) ||
       p.donor?.name?.toLowerCase().includes(lowerQuery) ||
       p.donor?.contact?.includes(query) ||
       p.collected_by_name?.toLowerCase().includes(lowerQuery) ||
       p.status?.toLowerCase().includes(lowerQuery) ||
-      p.collection_date?.includes(query)
+      (p.date_from || p.date_to || p.collection_date || "").toLowerCase().includes(lowerQuery) ||
+      formatDateRange(p).toLowerCase().includes(lowerQuery)
     );
-    setFilteredRows(filtered);
+  }, [formatDateRange]);
+
+  const load = useCallback(async (showLoader = false) => {
+    if (showLoader || rows.length === 0) setLoading(true);
+    const params = {};
+    if (filterFrom) params.date_from = filterFrom;
+    if (filterTo) params.date_to = filterTo;
+    try {
+      const r = await api.get("/payments", { params });
+      const nextRows = Array.isArray(r.data) ? r.data : [];
+      setRows(nextRows);
+      setFilteredRows(applySearch(nextRows, searchQuery));
+    } finally {
+      setLoading(false);
+    }
+  }, [filterFrom, filterTo, rows.length, searchQuery]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(true); }, [filterFrom, filterTo]);
+
+  const handleSearch = (query) => {
+    setSearchQuery(query);
+    setFilteredRows(applySearch(rows, query));
   };
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!donor) return toast.error("Select a donor first");
+    if (!donor || !donor.id) return toast.error("Select a donor first");
+    if (dateTo && dateFrom && dateTo < dateFrom) {
+      toast.error("To date must be on or after the from date.");
+      return;
+    }
     setSaving(true);
     try {
-      const { data } = await api.post("/payments", {
+      const from = dateFrom || today;
+      const to = dateTo || from;
+      const payload = {
         donor_id: donor.id,
-        collection_date: collectionDate,
+        date_from: from,
+        date_to: to,
+        collection_date: from,
         amount_per_month: Number(amount),
+        amount: Number(amount),
         note,
-      });
-      toast.success(`Receipt ${data.receipt_no} · ${inr(data.total_amount)}`);
-      setOpen(false); setDonor(null); setNote(""); load();
+      };
+      const { data } = await api.post("/payments", payload);
+      toast.success(`Receipt ${data.receipt_no} · ${inr(data.total_amount)} · Pending review`);
+      setOpen(false); setDonor(null); setNote(""); setDateFrom(today); setDateTo(today); load();
     } catch (e) { toast.error(formatDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
   };
@@ -88,8 +116,8 @@ export default function Payments() {
       subtitle: `Donor: ${p.donor.name} (${p.donor.serial}) · ${p.donor.contact}`,
       sections: [{
         heading: "Payment Details",
-        columns: ["Collection Date", "Amount"],
-        rows: [[p.collection_date || "—", inr(p.total_amount)]],
+        columns: ["Date Range", "Amount"],
+        rows: [[formatDateRange(p), inr(p.total_amount)]],
         total: p.total_amount,
       }],
     });
@@ -97,7 +125,7 @@ export default function Payments() {
   };
 
   const whatsappShare = (p) => {
-    const msg = `10Rs Baithulmal Receipt #${p.receipt_no}\nDonor: ${p.donor.name}\nDate: ${p.collection_date || "—"}\nTotal: ${inr(p.total_amount)}\n*ஜஸாகல்லாஹ் ஹைரன்* 
+    const msg = `10Rs Baithulmal Receipt #${p.receipt_no}\nDonor: ${p.donor.name}\nDate: ${formatDateRange(p)}\nTotal: ${inr(p.total_amount)}\n*ஜஸாகல்லாஹ் ஹைரன்* 
 
 10ரூபாய் பைத்துல்மாலுக்கு நிதி உதவி செய்த தங்ங்களுக்கும், உங்களுடைய குடும்பத்தார்கள்  மற்றும் முன்னோர்கள் அனைவர்களுக்கும் *அல்லாஹுத்தஆலா* இம்மை,மறுமை ஈருலகத்திலும் வெற்றியை தந்தருள்வானாக...
 
@@ -112,8 +140,10 @@ export default function Payments() {
   return (
     <div data-testid="payments-page">
       <PageHeader
-        title="Payment Collection"
-        subtitle="Record donations against a single collection date."
+        title={isCollector(user) ? "My Collections" : "Payment Collection"}
+        subtitle={isCollector(user)
+          ? "Record collections and review only your own history."
+          : "Record donations against a date range; they stay pending until approval."}
         action={
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
@@ -133,13 +163,17 @@ export default function Payments() {
                     <div className="text-xs tracking-widest uppercase text-copper">Step 2 · Payment Details</div>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div>
-                        <Label>Collection Date</Label>
-                        <Input type="date" required value={collectionDate} onChange={e => setCollectionDate(e.target.value)} data-testid="pay-collection-date" />
+                        <Label>From Date</Label>
+                        <Input type="date" required value={dateFrom} onChange={e => setDateFrom(e.target.value)} data-testid="pay-date-from" />
                       </div>
                       <div>
-                        <Label>₹ Amount</Label>
-                        <Input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} data-testid="pay-amount" />
+                        <Label>To Date</Label>
+                        <Input type="date" required value={dateTo} onChange={e => setDateTo(e.target.value)} data-testid="pay-date-to" />
                       </div>
+                    </div>
+                    <div>
+                      <Label>₹ Amount / Month</Label>
+                      <Input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} data-testid="pay-amount" />
                     </div>
                     <div>
                       <Label>Note (optional)</Label>
@@ -191,7 +225,7 @@ export default function Payments() {
             <TableRow className="bg-sidebar">
               <TableHead>Receipt</TableHead>
               <TableHead>Donor</TableHead>
-              <TableHead>Collection Date</TableHead>
+              <TableHead>From → To</TableHead>
               <TableHead>Total</TableHead>
               <TableHead>Collected by</TableHead>
               <TableHead>Status</TableHead>
@@ -205,7 +239,7 @@ export default function Payments() {
                 <TableRow key={p.id} data-testid={`payment-row-${p.id}`}>
                   <TableCell className="font-mono text-xs text-copper">{p.receipt_no}</TableCell>
                   <TableCell><div className="font-medium">{p.donor?.name}</div><div className="text-xs text-[color:var(--text-muted)]">{p.donor?.contact}</div></TableCell>
-                  <TableCell className="text-sm">{p.collection_date || "—"}</TableCell>
+                  <TableCell className="text-sm">{formatDateRange(p)}</TableCell>
                   <TableCell className="font-semibold">{inr(p.total_amount)}</TableCell>
                   <TableCell className="text-sm">{p.collected_by_name || "—"}</TableCell>
                   <TableCell><StatusBadge status={p.status} /></TableCell>

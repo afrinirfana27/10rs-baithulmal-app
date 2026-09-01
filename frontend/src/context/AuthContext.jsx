@@ -13,26 +13,22 @@ export const ROLE_LABELS = {
   accountant_admin: "Accountant – Admin",
   account_assistant: "Account Assistant",
   payment_collector: "Payment Collector",
-  admin: "Accountant – Admin",
-  "co-admin": "Accountant – Admin",
-  accountant: "Account Assistant",
-  collector: "Payment Collector",
 };
 
 export function isAccountantAdmin(user) {
-  return user?.role === ROLES.ACCOUNTANT_ADMIN || user?.role === "admin" || user?.role === "co-admin";
+  return user?.role === ROLES.ACCOUNTANT_ADMIN;
 }
 
 export function isStaff(user) {
-  return isAccountantAdmin(user) || user?.role === ROLES.ACCOUNT_ASSISTANT || user?.role === "accountant";
+  return isAccountantAdmin(user) || user?.role === ROLES.ACCOUNT_ASSISTANT;
 }
 
 export function isCollector(user) {
-  return user?.role === ROLES.PAYMENT_COLLECTOR || user?.role === "collector";
+  return user?.role === ROLES.PAYMENT_COLLECTOR;
 }
 
 export function canApprovePayments(user) {
-  return user?.role === ROLES.ACCOUNTANT_ADMIN;
+  return isAccountantAdmin(user);
 }
 
 export function roleLabel(role) {
