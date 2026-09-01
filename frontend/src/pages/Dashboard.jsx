@@ -36,16 +36,16 @@ export default function Dashboard() {
 
       {/* Fund Balance hero */}
       <div className="hero-fund" data-testid="hero-fund-balance">
-        <div className="text-white/85 text-sm">Fund Balance</div>
-        <div className="mt-1 text-4xl sm:text-5xl font-bold tracking-tight leading-none">{inr(s?.balance)}</div>
+        <div className="text-sm text-white/85">Fund Balance</div>
+        <div className="mt-1 text-4xl font-bold leading-none tracking-tight sm:text-5xl">{inr(s?.balance)}</div>
 
-        <div className="mt-6 grid grid-cols-2 divide-x divide-white/25">
+        <div className="grid grid-cols-2 mt-6 divide-x divide-white/25">
           <div className="pr-4">
             <div className="flex items-center gap-2">
-              <span className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+              <span className="flex items-center justify-center rounded-full w-7 h-7 bg-white/20">
                 <ArrowDown size={14} weight="bold" />
               </span>
-              <span className="text-white/85 text-sm">Collected</span>
+              <span className="text-sm text-white/85">Collected</span>
             </div>
             <div className="mt-1.5 text-xl font-semibold">{inr(s?.total_collected)}</div>
           </div>
@@ -54,20 +54,20 @@ export default function Dashboard() {
               <span className="w-7 h-7 rounded-full bg-[#FBE9BE] text-[#8A5A18] flex items-center justify-center">
                 <ArrowUp size={14} weight="bold" />
               </span>
-              <span className="text-white/85 text-sm">Distributed</span>
+              <span className="text-sm text-white/85">Distributed</span>
             </div>
             <div className="mt-1.5 text-xl font-semibold">
               {inr((s?.total_expense || 0) + (s?.total_sadakah || 0))}
             </div>
           </div>
         </div>
-        <div className="mt-4 grid grid-cols-2 divide-x divide-white/25">
+        <div className="grid grid-cols-2 mt-4 divide-x divide-white/25">
           <div className="pr-4">
-            <div className="text-white/85 text-sm">Loan Outstanding</div>
+            <div className="text-sm text-white/85">Loan Outstanding</div>
             <div className="mt-1.5 text-xl font-semibold">{inr(s?.loan_outstanding || s?.total_loan_outstanding || 0)}</div>
           </div>
           <div className="pl-4">
-            <div className="text-white/85 text-sm">V Kadan (Loan)</div>
+            <div className="text-sm text-white/85">V Kadan (Loan)</div>
             <div className="mt-1.5 text-xl font-semibold">{inr(s?.loan_outstanding || s?.total_loan_outstanding || 0)}</div>
           </div>
         </div>
@@ -107,7 +107,7 @@ export default function Dashboard() {
 
       {/* Quick Actions */}
       <div>
-        <h2 className="text-lg sm:text-xl font-bold mt-2 mb-3">Quick Actions</h2>
+        <h2 className="mt-2 mb-3 text-lg font-bold sm:text-xl">Quick Actions</h2>
         <div className="grid grid-cols-2 gap-3.5">
           <QuickAction to="/donors" icon={UserPlus} label="Add Donor" testid="qa-add-donor" />
           <QuickAction to="/beneficiaries" icon={Heart} label="Add Beneficiary" testid="qa-add-beneficiary" />
@@ -129,7 +129,7 @@ const Tile = ({ className, icon: Icon, label, value, testid }) => (
   <div className={`${className} rounded-xl p-4 sm:p-5`} data-testid={testid}>
     <Icon size={22} weight="regular" />
     <div className="mt-4 text-sm font-medium opacity-90">{label}</div>
-    <div className="mt-1 text-2xl sm:text-3xl font-bold">{value}</div>
+    <div className="mt-1 text-2xl font-bold sm:text-3xl">{value}</div>
   </div>
 );
 
@@ -147,7 +147,7 @@ const QuickAction = ({ to, icon: Icon, label, testid }) => (
 );
 
 const MiniStat = ({ icon: Icon, label, value }) => (
-  <div className="card-earth p-4 flex items-center gap-3">
+  <div className="flex items-center gap-3 p-4 card-earth">
     <span className="w-9 h-9 rounded-full bg-[rgba(21,122,69,0.12)] text-moss flex items-center justify-center">
       <Icon size={16} weight="duotone" />
     </span>
