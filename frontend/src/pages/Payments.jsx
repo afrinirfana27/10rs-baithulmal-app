@@ -39,6 +39,11 @@ export default function Payments() {
     return from === to ? from : `${from} → ${to}`;
   }, []);
 
+  const isPendingStatus = (status) => {
+    const value = String(status || "").trim().toLowerCase();
+    return value === "pending" || value === "in_review" || value === "in review" || value === "review";
+  };
+
   const applySearch = useCallback((records, query) => {
     if (!query.trim()) return records;
     const lowerQuery = query.toLowerCase();
@@ -225,7 +230,8 @@ export default function Payments() {
             <TableRow className="bg-sidebar">
               <TableHead>Receipt</TableHead>
               <TableHead>Donor</TableHead>
-              <TableHead>From → To</TableHead>
+              <TableHead>From</TableHead>
+              <TableHead>To</TableHead>
               <TableHead>Total</TableHead>
               <TableHead>Collected by</TableHead>
               <TableHead>Status</TableHead>
@@ -239,7 +245,8 @@ export default function Payments() {
                 <TableRow key={p.id} data-testid={`payment-row-${p.id}`}>
                   <TableCell className="font-mono text-xs text-copper">{p.receipt_no}</TableCell>
                   <TableCell><div className="font-medium">{p.donor?.name}</div><div className="text-xs text-[color:var(--text-muted)]">{p.donor?.contact}</div></TableCell>
-                  <TableCell className="text-sm">{formatDateRange(p)}</TableCell>
+                  <TableCell className="text-sm">{p.date_from || p.collection_date || "—"}</TableCell>
+                  <TableCell className="text-sm">{p.date_to || p.date_from || p.collection_date || "—"}</TableCell>
                   <TableCell className="font-semibold">{inr(p.total_amount)}</TableCell>
                   <TableCell className="text-sm">{p.collected_by_name || "—"}</TableCell>
                   <TableCell><StatusBadge status={p.status} /></TableCell>
@@ -247,7 +254,7 @@ export default function Payments() {
                     <div className="inline-flex gap-1">
                       <Button size="sm" variant="ghost" onClick={() => receipt(p)} data-testid={`pdf-${p.id}`}><ReceiptIcon size={14} weight="duotone" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => whatsappShare(p)} data-testid={`whatsapp-${p.id}`}><WhatsappLogo size={14} weight="duotone" /></Button>
-                      {canApprove && p.status === "pending" && (
+                      {canApprove && isPendingStatus(p.status) && (
                         <>
                           <Button size="sm" className="text-xs rounded-full btn-primary-moss" onClick={() => approve(p.id, true)} data-testid={`approve-${p.id}`}>Approve</Button>
                           <Button size="sm" variant="outline" onClick={() => approve(p.id, false)} data-testid={`reject-${p.id}`}>Reject</Button>

@@ -92,7 +92,7 @@ export default function Accounts() {
                       <TableCell className="text-sm">{p.collected_by_name}</TableCell>
                       <TableCell className="text-right">
                         <Button size="sm" className="btn-primary-moss rounded-full text-xs mr-2" onClick={() => act(p.id, true)} data-testid={`acc-approve-${p.id}`}>Approve</Button>
-                        <Button size="sm" variant="outline" onClick={() => act(p.id, false)} data-testid={`acc-reject-${p.id}`}>Outstanding</Button>
+                        <Button size="sm" variant="outline" onClick={() => act(p.id, false)} data-testid={`acc-reject-${p.id}`}>Reject</Button>
                       </TableCell>
                     </TableRow>
                   ))}
