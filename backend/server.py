@@ -1125,10 +1125,19 @@ async def on_shutdown():
 
 app.include_router(api)
 
-cors_origins = [origin.strip() for origin in os.environ.get(
-    'CORS_ORIGINS',
-    'https://10rs-baithulmal-app.vercel.app,http://localhost:3000,http://127.0.0.1:3000'
-).split(',') if origin.strip()]
+default_cors_origins = {
+    'https://10rs-baithulmal-app.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+}
+configured_cors_origins = {
+    origin.strip().rstrip('/')
+    for origin in os.environ.get('CORS_ORIGINS', '').split(',')
+    if origin.strip()
+}
+cors_origins = sorted(default_cors_origins | configured_cors_origins)
 
 app.add_middleware(
     CORSMiddleware,
